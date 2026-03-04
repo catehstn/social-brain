@@ -412,15 +412,36 @@ def collect_jetpack(
             if isinstance(row, list) and len(row) >= 2:
                 daily_views.append({"date": row[0], "views": row[1]})
 
-        top_posts = []
-        for post in top_posts_data.get("top-posts", []):
-            top_posts.append(
-                {
+        # The API returns either a flat "top-posts" list or a "days" dict
+        # with per-day postviews arrays — handle both and aggregate.
+        top_posts_raw: dict[str, dict] = {}
+
+        if "top-posts" in top_posts_data:
+            for post in top_posts_data["top-posts"]:
+                href = post.get("href", "")
+                top_posts_raw[href] = {
                     "title": post.get("title", ""),
-                    "href": post.get("href", ""),
+                    "href": href,
                     "views": post.get("views", 0),
                 }
-            )
+        elif "days" in top_posts_data:
+            for day_data in top_posts_data["days"].values():
+                for post in day_data.get("postviews", []):
+                    href = post.get("href", "")
+                    if not href:
+                        continue
+                    if href in top_posts_raw:
+                        top_posts_raw[href]["views"] += post.get("views", 0)
+                    else:
+                        top_posts_raw[href] = {
+                            "title": post.get("title", ""),
+                            "href": href,
+                            "views": post.get("views", 0),
+                        }
+
+        top_posts = sorted(
+            top_posts_raw.values(), key=lambda p: p["views"], reverse=True
+        )[:10]
 
         total_views = sum(d["views"] for d in daily_views)
         logger.info(
