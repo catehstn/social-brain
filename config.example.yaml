@@ -21,7 +21,11 @@ jetpack_access_token: YOUR_JETPACK_ACCESS_TOKEN
 amazon_asins:
   - B0XXXXXXXXXX   # Kindle edition
   - 1234567890     # Paperback ISBN-10
-amazon_marketplace: amazon.com  # or amazon.co.uk, amazon.de, etc.
+amazon_marketplaces:           # collect from all listed marketplaces
+  - amazon.com
+  - amazon.co.uk
+  # - amazon.de
+  # - amazon.ca
 
 # --- Vercel Web Analytics (optional) ---
 # Leave blank to skip Vercel collection.

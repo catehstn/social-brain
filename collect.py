@@ -919,40 +919,48 @@ def _scrape_amazon_asin(client: httpx.Client, asin: str, marketplace: str) -> di
 
 def collect_amazon(
     asins: list[str],
-    marketplace: str = "amazon.com",
+    marketplaces: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """
     Collect public book metrics (sales rank, rating, review count) from
-    Amazon product pages. No authentication required.
+    Amazon product pages across one or more marketplaces.
+    No authentication required.
     """
     if not asins:
         logger.info("Amazon: no ASINs configured — skipping")
         return None
 
-    books = []
-    with httpx.Client(timeout=30, headers=_AMAZON_HEADERS) as client:
-        for i, asin in enumerate(asins):
-            if i > 0:
-                time.sleep(1)  # polite delay between requests
-            try:
-                book = _scrape_amazon_asin(client, asin, marketplace)
-                books.append(book)
-                logger.info(
-                    "Amazon [%s]: rank=#%s, rating=%s, reviews=%s — %s",
-                    asin, book["best_sellers_rank"], book["rating"],
-                    book["reviews"], book["title"] or "(no title)",
-                )
-            except Exception as exc:
-                logger.warning("Amazon [%s] failed: %s", asin, exc)
+    if not marketplaces:
+        marketplaces = ["amazon.com", "amazon.co.uk"]
 
-    if not books:
+    results: dict[str, list] = {}
+    with httpx.Client(timeout=30, headers=_AMAZON_HEADERS) as client:
+        for marketplace in marketplaces:
+            books = []
+            for i, asin in enumerate(asins):
+                if i > 0:
+                    time.sleep(1)
+                try:
+                    book = _scrape_amazon_asin(client, asin, marketplace)
+                    books.append(book)
+                    logger.info(
+                        "Amazon [%s/%s]: rank=#%s, rating=%s, reviews=%s — %s",
+                        marketplace, asin, book["best_sellers_rank"],
+                        book["rating"], book["reviews"],
+                        book["title"] or "(no title)",
+                    )
+                except Exception as exc:
+                    logger.warning("Amazon [%s/%s] failed: %s", marketplace, asin, exc)
+            if books:
+                results[marketplace] = books
+
+    if not results:
         return None
 
     return {
         "platform": "amazon",
-        "marketplace": marketplace,
         "collected_at": _iso(_utcnow()),
-        "books": books,
+        "by_marketplace": results,
     }
 
 
@@ -1012,7 +1020,7 @@ def collect_all(
                 return
             data = collect_amazon(
                 asins,
-                marketplace=config.get("amazon_marketplace", "amazon.com"),
+                marketplaces=config.get("amazon_marketplaces") or ["amazon.com", "amazon.co.uk"],
             )
         elif name == "vercel":
             vercel_token = config.get("vercel_token", "")
