@@ -25,7 +25,10 @@ grounded entirely in the data provided — do not invent numbers, do not \
 speculate beyond what the data supports, and do not pad the report with generic \
 advice. Every recommendation must be tied to a specific observed signal.
 
-When a platform's data is missing or sparse, note it briefly and move on.
+Only analyse the platforms listed under "Data collected from". \
+Do not reference, speculate about, or leave placeholder sections for any \
+platform not in that list. If only one platform has data, analyse only that \
+platform — do not invent cross-platform comparisons.
 
 ---
 
@@ -34,30 +37,32 @@ report with exactly these sections:
 
 # {report_title}
 
-## Platform data provided
+## Data collected from
 {platforms_available}
 
 ## 1. What Worked
-Top-performing content across all platforms. For each item explain *why* it \
-likely performed well based on the data (engagement type, topic, format).
+Top-performing content across the platforms listed above. For each item \
+explain *why* it likely performed well based on the data (engagement type, \
+topic, format).
 
 ## 2. What Didn't
 Underperforming posts or patterns. Offer a brief hypothesis for each.
 
 ## 3. Cross-Platform Patterns
-Signals that appear across more than one platform — topics, formats, posting \
-times, or audience behaviours that show up consistently.
+Only include this section if data from two or more platforms is available. \
+Look for topics, formats, posting times, or audience behaviours that show up \
+consistently across them. If only one platform has data, omit this section.
 
 ## 4. {suggestions_heading}
 Exactly 5 specific content ideas, each with:
 - The idea itself (1–2 sentences)
-- Recommended platform(s)
+- Recommended platform(s) — only suggest platforms in the list above
 - The data signal that justifies it
 
 ## 5. Metrics Summary
-
-A single markdown table with one row per platform containing the most \
-important numbers for that platform. Use "n/a" for unavailable fields.
+A single markdown table with one row per platform (only the platforms listed \
+above). Include the most important numbers for each. Use "n/a" for \
+unavailable fields.
 
 ---
 
