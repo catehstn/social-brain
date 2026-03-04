@@ -772,76 +772,74 @@ def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[
 
 def collect_vercel(
     token: str,
-    project_id: str,
+    project_slug: str,
     team_id: str | None = None,
     since: datetime | None = None,
 ) -> dict[str, Any] | None:
     """
     Collect web analytics from Vercel's internal analytics API.
-    Fetches daily page views, unique visitors, and top pages.
-    Note: this uses Vercel's undocumented internal API — the same one
-    the dashboard uses. It may change without notice.
+    Fetches overview stats, daily timeseries, top pages, and referrers.
+    Uses the same endpoints as the Vercel dashboard.
+    Note: undocumented internal API — may change without notice.
     """
     if since is None:
         since = _default_since()
 
     try:
         now = _utcnow()
-        # Vercel uses millisecond Unix timestamps
-        from_ms = int(since.timestamp() * 1000)
-        to_ms = int(now.timestamp() * 1000)
-
-        base = "https://vercel.com/api/web/insights"
+        base = "https://vercel.com/api/web-analytics"
         headers = {"Authorization": f"Bearer {token}"}
         common_params: dict[str, Any] = {
-            "projectId": project_id,
-            "from": from_ms,
-            "to": to_ms,
+            "projectId": project_slug,
             "environment": "production",
+            "filter": "{}",
+            "from": since.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "to": now.strftime("%Y-%m-%dT%H:%M:%S.999Z"),
+            "tz": "UTC",
         }
         if team_id:
             common_params["teamId"] = team_id
 
         with httpx.Client(timeout=30, headers=headers) as client:
-            # Overall stats: pageviews, visitors, sessions
-            r = client.get(base, params=common_params)
-            r.raise_for_status()
-            stats_data = r.json()
+            overview_r = client.get(f"{base}/overview", params=common_params)
+            overview_r.raise_for_status()
+            overview = overview_r.json()
 
-            # Top pages by views
-            pages_r = client.get(f"{base}/path", params={**common_params, "limit": 20})
+            ts_r = client.get(f"{base}/timeseries", params=common_params)
+            ts_r.raise_for_status()
+            timeseries = ts_r.json()
+
+            pages_r = client.get(f"{base}/stats", params={**common_params, "type": "path", "limit": 20})
             pages_r.raise_for_status()
             pages_data = pages_r.json()
 
-            # Referrers
-            ref_r = client.get(f"{base}/referrer", params={**common_params, "limit": 10})
+            ref_r = client.get(f"{base}/stats", params={**common_params, "type": "referrer", "limit": 10})
             ref_r.raise_for_status()
             referrers_data = ref_r.json()
 
-        # Parse overall stats — structure: {"data": {"pageViews": N, "visitors": N, ...}}
-        stats = stats_data.get("data", stats_data)
-        page_views = stats.get("pageViews", stats.get("totalPageViews", None))
-        visitors = stats.get("visitors", stats.get("uniqueVisitors", None))
-        sessions = stats.get("sessions", None)
+        # overview: {"total": N, "devices": N, "bounceRate": N}
+        page_views = overview.get("total")
+        visitors = overview.get("devices")
+        bounce_rate = overview.get("bounceRate")
 
-        # Top pages — structure: {"data": [{"path": "/...", "pageViews": N}, ...]}
-        pages_list = pages_data.get("data", pages_data) if isinstance(pages_data, dict) else pages_data
-        top_pages = []
-        for page in (pages_list if isinstance(pages_list, list) else []):
-            top_pages.append({
-                "path": page.get("path", page.get("value", "")),
-                "page_views": page.get("pageViews", page.get("count", 0)),
-                "visitors": page.get("visitors", page.get("uniqueVisitors", None)),
+        # timeseries: {"data": {"groups": {"all": [{"key": "YYYY-MM-DD", "total": N, "devices": N}, ...]}}}
+        daily = []
+        for entry in timeseries.get("data", {}).get("groups", {}).get("all", []):
+            daily.append({
+                "date": entry.get("key"),
+                "page_views": entry.get("total"),
+                "visitors": entry.get("devices"),
             })
 
-        # Referrers
-        ref_list = referrers_data.get("data", referrers_data) if isinstance(referrers_data, dict) else referrers_data
-        top_referrers = []
-        for ref in (ref_list if isinstance(ref_list, list) else []):
-            top_referrers.append({
-                "referrer": ref.get("referrer", ref.get("value", "")),
-                "page_views": ref.get("pageViews", ref.get("count", 0)),
-            })
+        # stats: {"data": [{"key": "/path", "total": N, "devices": N}, ...]}
+        top_pages = [
+            {"path": p.get("key", ""), "page_views": p.get("total", 0), "visitors": p.get("devices")}
+            for p in pages_data.get("data", [])
+        ]
+        top_referrers = [
+            {"referrer": r.get("key", ""), "page_views": r.get("total", 0)}
+            for r in referrers_data.get("data", [])
+        ]
 
         logger.info(
             "Vercel: %s page views, %s visitors since %s",
@@ -849,12 +847,13 @@ def collect_vercel(
         )
         return {
             "platform": "vercel",
-            "project_id": project_id,
+            "project": project_slug,
             "collected_at": _iso(now),
             "since": _iso(since),
             "page_views": page_views,
             "visitors": visitors,
-            "sessions": sessions,
+            "bounce_rate_pct": bounce_rate,
+            "daily": daily,
             "top_pages": top_pages,
             "top_referrers": top_referrers,
         }

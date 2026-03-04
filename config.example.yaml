@@ -20,7 +20,7 @@ jetpack_access_token: YOUR_JETPACK_ACCESS_TOKEN
 # --- Vercel Web Analytics (optional) ---
 # Leave blank to skip Vercel collection.
 vercel_token: YOUR_VERCEL_TOKEN        # Vercel account token (Settings → Tokens)
-vercel_project_id: YOUR_PROJECT_ID    # Project ID from Project Settings → General
+vercel_project_id: your-project-slug  # Project name/slug (shown in the URL, e.g. "my-app")
 vercel_team_id:                        # Team ID if the project is in a team (optional)
 
 # --- Content strategy ---
