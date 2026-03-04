@@ -115,7 +115,9 @@ The tool always picks up the **most recently modified** CSV or XLSX file in that
 
 Your Vercel project must have Web Analytics enabled.
 
-> **Note:** Vercel does not publish a public REST API for Web Analytics. social-brain uses the same internal API the Vercel dashboard uses. It works reliably but could change without notice.
+> **Note:** Vercel does not publish a public REST API for Web Analytics — there is an [open feature request](https://github.com/vercel/analytics/issues/68) for one. social-brain uses the same internal API the Vercel dashboard uses. It may change without notice, and Vercel support will not help if it breaks.
+>
+> **Known limitation:** If the project is on a team where you are a Viewer (not Owner/Member), the analytics endpoint returns 404 even in the Vercel dashboard itself. You need at least Member access to the team, or the project must be under your personal account.
 
 **Get your token and project ID:**
 
@@ -123,9 +125,7 @@ Your Vercel project must have Web Analytics enabled.
    - Scope: **Full Account** (or the specific team containing the project).
    - Set an expiry that suits your workflow.
 2. Paste the token into `vercel_token` in `config.yaml`.
-3. Open your project in the Vercel dashboard and go to **Settings → General**.
-4. Copy the **Project ID** shown near the top of the page.
-5. Paste it into `vercel_project_id` in `config.yaml`.
+3. Set `vercel_project_id` to your project's **slug** — this is the project name as it appears in the URL (e.g. `https://vercel.com/my-team/my-app` → `my-app`).
 6. If the project belongs to a team, also set `vercel_team_id`:
    - Go to **Team Settings → General** and copy the **Team ID**.
 
