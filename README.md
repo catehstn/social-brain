@@ -113,21 +113,23 @@ The tool always picks up the **most recently modified** CSV or XLSX file in that
 
 ### Vercel Web Analytics
 
-Your Vercel project must have Web Analytics enabled.
+Your Vercel project must have Web Analytics enabled (click **Analytics** in the project sidebar — if you can see data there, you're good).
 
-> **Note:** Vercel does not publish a public REST API for Web Analytics — there is an [open feature request](https://github.com/vercel/analytics/issues/68) for one. social-brain uses the same internal API the Vercel dashboard uses. It may change without notice, and Vercel support will not help if it breaks.
+> **Note:** Vercel does not publish a public REST API for Web Analytics — there is an [open feature request](https://github.com/vercel/analytics/issues/68) for one. social-brain uses the same internal endpoints the Vercel dashboard uses. These may change without notice.
 >
-> **Known limitation:** If the project is on a team where you are a Viewer (not Owner/Member), the analytics endpoint returns 404 even in the Vercel dashboard itself. You need at least Member access to the team, or the project must be under your personal account.
+> **Known limitation:** You need at least **Member** access on the team that owns the project. Viewer access causes 404s even in the Vercel dashboard itself.
 
-**Get your token and project ID:**
+**Setup:**
 
-1. Go to [vercel.com/account/tokens](https://vercel.com/account/tokens) and create a new token.
-   - Scope: **Full Account** (or the specific team containing the project).
-   - Set an expiry that suits your workflow.
+1. Go to [vercel.com/account/tokens](https://vercel.com/account/tokens) → **Create token**.
+   - Give it a name (e.g. `social-brain`) and set an expiry.
+   - Scope: **Full Account** (required to access team projects).
 2. Paste the token into `vercel_token` in `config.yaml`.
-3. Set `vercel_project_id` to your project's **slug** — this is the project name as it appears in the URL (e.g. `https://vercel.com/my-team/my-app` → `my-app`).
-6. If the project belongs to a team, also set `vercel_team_id`:
-   - Go to **Team Settings → General** and copy the **Team ID**.
+3. Set `vercel_project_id` to your project **slug** — the name shown in the URL:
+   `https://vercel.com/my-team/my-app` → `my-app`.
+4. If the project is under a team (not your personal account), set `vercel_team_id`:
+   - The team ID looks like `team_xxxxxxxxxxxxxxxxxxxxxxxx`.
+   - Find it at **Team Settings → General**, or run `python run.py --platform vercel` and check the error — the team ID is visible in the API response when auth succeeds but the project isn't found.
 
 ### Amazon
 
