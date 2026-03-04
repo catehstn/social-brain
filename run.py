@@ -143,7 +143,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--platform",
-        choices=["mastodon", "bluesky", "buttondown", "jetpack", "linkedin", "substack"],
+        choices=["mastodon", "bluesky", "buttondown", "jetpack", "linkedin", "substack", "vercel"],
         default=None,
         help="Collect only one platform (cannot be combined with --analyse-only).",
     )

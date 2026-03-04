@@ -111,6 +111,24 @@ LinkedIn does not offer a public analytics API for individual creators. Instead,
 
 The tool always picks up the **most recently modified** CSV or XLSX file in that folder. You can keep old exports there — they won't interfere.
 
+### Vercel Web Analytics
+
+Your Vercel project must have Web Analytics enabled.
+
+> **Note:** Vercel does not publish a public REST API for Web Analytics. social-brain uses the same internal API the Vercel dashboard uses. It works reliably but could change without notice.
+
+**Get your token and project ID:**
+
+1. Go to [vercel.com/account/tokens](https://vercel.com/account/tokens) and create a new token.
+   - Scope: **Full Account** (or the specific team containing the project).
+   - Set an expiry that suits your workflow.
+2. Paste the token into `vercel_token` in `config.yaml`.
+3. Open your project in the Vercel dashboard and go to **Settings → General**.
+4. Copy the **Project ID** shown near the top of the page.
+5. Paste it into `vercel_project_id` in `config.yaml`.
+6. If the project belongs to a team, also set `vercel_team_id`:
+   - Go to **Team Settings → General** and copy the **Team ID**.
+
 ### Substack
 
 Substack doesn't offer a public analytics API. Export your email analytics manually and drop the CSV into `substack_drops/`.
@@ -158,6 +176,7 @@ python run.py --platform bluesky
 python run.py --platform buttondown
 python run.py --platform jetpack
 python run.py --platform linkedin
+python run.py --platform vercel
 ```
 
 ---

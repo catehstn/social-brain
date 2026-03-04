@@ -17,6 +17,12 @@ buttondown_api_key: YOUR_BUTTONDOWN_API_KEY
 jetpack_site: yourdomain.com           # your WordPress site domain
 jetpack_access_token: YOUR_JETPACK_ACCESS_TOKEN
 
+# --- Vercel Web Analytics (optional) ---
+# Leave blank to skip Vercel collection.
+vercel_token: YOUR_VERCEL_TOKEN        # Vercel account token (Settings → Tokens)
+vercel_project_id: YOUR_PROJECT_ID    # Project ID from Project Settings → General
+vercel_team_id:                        # Team ID if the project is in a team (optional)
+
 # --- Content strategy ---
 content_pillars:
   - Open source and developer tools

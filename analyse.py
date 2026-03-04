@@ -127,6 +127,13 @@ def _trim_data(data: dict[str, Any]) -> dict[str, Any]:
         email.pop("body", None)
         email.pop("id", None)
 
+    # Vercel: drop raw daily_views if there are many — keep summary stats and top pages
+    if "vercel" in data:
+        daily = data["vercel"].get("daily_views", [])
+        if len(daily) > 30:
+            data["vercel"]["daily_views"] = daily[-30:]  # keep most recent 30 days
+            data["vercel"]["daily_views_note"] = f"Showing most recent 30 of {len(daily)} days"
+
     return data
 
 

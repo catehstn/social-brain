@@ -87,6 +87,7 @@ def collect_mastodon(
                     if created < since:
                         batch = []  # signal outer loop to stop
                         break
+                    attachments = post.get("media_attachments", [])
                     posts.append(
                         {
                             "id": post["id"],
@@ -96,6 +97,8 @@ def collect_mastodon(
                             "favourites": post.get("favourites_count", 0),
                             "boosts": post.get("reblogs_count", 0),
                             "replies": post.get("replies_count", 0),
+                            "has_attachment": bool(attachments),
+                            "attachment_types": list({a.get("type") for a in attachments if a.get("type")}),
                         }
                     )
 
@@ -185,6 +188,21 @@ def collect_bluesky(
                     if item.get("reason", {}).get("$type") == "app.bsky.feed.defs#reasonRepost":
                         continue
 
+                    embed = post.get("embed", {})
+                    embed_type = embed.get("$type", "")
+                    if "images" in embed_type:
+                        attachment_types = ["image"]
+                    elif "video" in embed_type:
+                        attachment_types = ["video"]
+                    elif "external" in embed_type:
+                        attachment_types = ["link"]
+                    elif "recordWithMedia" in embed_type:
+                        attachment_types = ["quote+media"]
+                    elif "record" in embed_type:
+                        attachment_types = ["quote"]
+                    else:
+                        attachment_types = []
+
                     posts.append(
                         {
                             "uri": post.get("uri", ""),
@@ -193,6 +211,8 @@ def collect_bluesky(
                             "likes": post.get("likeCount", 0),
                             "reposts": post.get("repostCount", 0),
                             "replies": post.get("replyCount", 0),
+                            "has_attachment": bool(embed_type),
+                            "attachment_types": attachment_types,
                         }
                     )
 
@@ -747,6 +767,104 @@ def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[
 
 
 # ---------------------------------------------------------------------------
+# Vercel Web Analytics
+# ---------------------------------------------------------------------------
+
+def collect_vercel(
+    token: str,
+    project_id: str,
+    team_id: str | None = None,
+    since: datetime | None = None,
+) -> dict[str, Any] | None:
+    """
+    Collect web analytics from Vercel's internal analytics API.
+    Fetches daily page views, unique visitors, and top pages.
+    Note: this uses Vercel's undocumented internal API — the same one
+    the dashboard uses. It may change without notice.
+    """
+    if since is None:
+        since = _default_since()
+
+    try:
+        now = _utcnow()
+        # Vercel uses millisecond Unix timestamps
+        from_ms = int(since.timestamp() * 1000)
+        to_ms = int(now.timestamp() * 1000)
+
+        base = "https://vercel.com/api/web/insights"
+        headers = {"Authorization": f"Bearer {token}"}
+        common_params: dict[str, Any] = {
+            "projectId": project_id,
+            "from": from_ms,
+            "to": to_ms,
+            "environment": "production",
+        }
+        if team_id:
+            common_params["teamId"] = team_id
+
+        with httpx.Client(timeout=30, headers=headers) as client:
+            # Overall stats: pageviews, visitors, sessions
+            r = client.get(base, params=common_params)
+            r.raise_for_status()
+            stats_data = r.json()
+
+            # Top pages by views
+            pages_r = client.get(f"{base}/path", params={**common_params, "limit": 20})
+            pages_r.raise_for_status()
+            pages_data = pages_r.json()
+
+            # Referrers
+            ref_r = client.get(f"{base}/referrer", params={**common_params, "limit": 10})
+            ref_r.raise_for_status()
+            referrers_data = ref_r.json()
+
+        # Parse overall stats — structure: {"data": {"pageViews": N, "visitors": N, ...}}
+        stats = stats_data.get("data", stats_data)
+        page_views = stats.get("pageViews", stats.get("totalPageViews", None))
+        visitors = stats.get("visitors", stats.get("uniqueVisitors", None))
+        sessions = stats.get("sessions", None)
+
+        # Top pages — structure: {"data": [{"path": "/...", "pageViews": N}, ...]}
+        pages_list = pages_data.get("data", pages_data) if isinstance(pages_data, dict) else pages_data
+        top_pages = []
+        for page in (pages_list if isinstance(pages_list, list) else []):
+            top_pages.append({
+                "path": page.get("path", page.get("value", "")),
+                "page_views": page.get("pageViews", page.get("count", 0)),
+                "visitors": page.get("visitors", page.get("uniqueVisitors", None)),
+            })
+
+        # Referrers
+        ref_list = referrers_data.get("data", referrers_data) if isinstance(referrers_data, dict) else referrers_data
+        top_referrers = []
+        for ref in (ref_list if isinstance(ref_list, list) else []):
+            top_referrers.append({
+                "referrer": ref.get("referrer", ref.get("value", "")),
+                "page_views": ref.get("pageViews", ref.get("count", 0)),
+            })
+
+        logger.info(
+            "Vercel: %s page views, %s visitors since %s",
+            page_views, visitors, _iso(since),
+        )
+        return {
+            "platform": "vercel",
+            "project_id": project_id,
+            "collected_at": _iso(now),
+            "since": _iso(since),
+            "page_views": page_views,
+            "visitors": visitors,
+            "sessions": sessions,
+            "top_pages": top_pages,
+            "top_referrers": top_referrers,
+        }
+
+    except Exception as exc:
+        logger.error("Vercel collection failed: %s", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -757,6 +875,7 @@ PLATFORM_COLLECTORS = {
     "jetpack": "collect_jetpack",
     "linkedin": "collect_linkedin",
     "substack": "collect_substack",
+    "vercel": "collect_vercel",
 }
 
 
@@ -793,6 +912,18 @@ def collect_all(
             data = collect_linkedin()
         elif name == "substack":
             data = collect_substack()
+        elif name == "vercel":
+            vercel_token = config.get("vercel_token", "")
+            vercel_project_id = config.get("vercel_project_id", "")
+            if not vercel_token or not vercel_project_id:
+                logger.info("Vercel: vercel_token or vercel_project_id not configured — skipping")
+                return
+            data = collect_vercel(
+                vercel_token,
+                vercel_project_id,
+                team_id=config.get("vercel_team_id") or None,
+                since=since,
+            )
         else:
             logger.error("Unknown platform: %s", name)
             return
