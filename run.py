@@ -216,7 +216,7 @@ def main() -> None:
     logger.info("=== Building analysis prompt ===")
     from analyse import save_prompt
 
-    prompt_path = save_prompt(collected, config, period=label, reports_dir=REPORTS_DIR)
+    prompt_path = save_prompt(collected, config, period=label, reports_dir=REPORTS_DIR, months=args.months)
     logger.info("=== Done. Paste %s into claude.ai to get your report ===", prompt_path)
 
 

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 REPORT_TEMPLATE = """\
 You are a social media and content analytics expert. You receive raw engagement
-data from multiple platforms and produce a concise, actionable weekly report
+data from multiple platforms and produce a concise, actionable {report_noun} report
 in well-structured markdown.
 
 Your analysis must be grounded entirely in the data provided — do not invent
@@ -28,10 +28,10 @@ move on — do not dwell on it.
 ---
 
 You have been given the following social media and content analytics data for
-the past week/two weeks. Use it to produce a markdown report with exactly these
+{period_description}. Use it to produce a markdown report with exactly these
 sections:
 
-# Weekly Content Performance Report — {period}
+# {report_title}
 
 ## Platform data provided
 {platforms_available}
@@ -47,7 +47,7 @@ Underperforming posts or patterns. Offer a brief hypothesis for each.
 Signals that appear across more than one platform — topics, formats, posting
 times, or audience behaviours that show up consistently.
 
-## 4. Next Week Suggestions
+## 4. {suggestions_heading}
 Exactly 5 specific content ideas, each with:
 - The idea itself (1–2 sentences)
 - Recommended platform(s)
@@ -60,11 +60,11 @@ important numbers for that platform. Include a "n/a" for unavailable fields.
 
 ---
 
+{goals_heading}:
+{goals}
+
 Content pillars to keep in mind:
 {pillars}
-
-Weekly goals:
-{goals}
 
 ---
 
@@ -77,6 +77,7 @@ def build_prompt(
     collected_data: dict[str, Any],
     config: dict[str, Any],
     period: str,
+    months: int | None = None,
 ) -> str:
     platforms_available = (
         "\n".join(f"- {p}" for p in collected_data)
@@ -94,11 +95,28 @@ def build_prompt(
 
     data_json = json.dumps(collected_data, indent=2, default=str)
 
+    if months:
+        report_noun = f"{months}-month"
+        period_description = f"the past {months} months"
+        report_title = f"{months}-Month Content Performance Report — {period}"
+        suggestions_heading = "Next Period Suggestions"
+        goals_heading = "Goals"
+    else:
+        report_noun = "weekly"
+        period_description = "the past two weeks"
+        report_title = f"Weekly Content Performance Report — {period}"
+        suggestions_heading = "Next Week Suggestions"
+        goals_heading = "Weekly goals"
+
     return REPORT_TEMPLATE.format(
-        period=period,
+        report_noun=report_noun,
+        period_description=period_description,
+        report_title=report_title,
         platforms_available=platforms_available,
-        pillars=pillars,
+        suggestions_heading=suggestions_heading,
+        goals_heading=goals_heading,
         goals=goals,
+        pillars=pillars,
         data_json=data_json,
     )
 
@@ -108,12 +126,13 @@ def save_prompt(
     config: dict[str, Any],
     period: str,
     reports_dir: Path,
+    months: int | None = None,
 ) -> Path:
     """
     Build the analysis prompt and write it to reports/prompt-{period}.txt.
     Returns the path to the written file.
     """
-    prompt = build_prompt(collected_data, config, period)
+    prompt = build_prompt(collected_data, config, period, months=months)
     reports_dir.mkdir(parents=True, exist_ok=True)
     path = reports_dir / f"prompt-{period}.txt"
     path.write_text(prompt)
