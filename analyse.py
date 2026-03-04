@@ -1,21 +1,18 @@
 """
-analyse.py — sends collected platform data to the Claude API and returns
-a structured markdown report.
+analyse.py — builds the analysis prompt from collected platform data and
+writes it to reports/prompt-YYYY-WNN.txt for manual use with claude.ai.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
-
-import anthropic
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-4-20250514"
-
-SYSTEM_PROMPT = """\
+REPORT_TEMPLATE = """\
 You are a social media and content analytics expert. You receive raw engagement
 data from multiple platforms and produce a concise, actionable weekly report
 in well-structured markdown.
@@ -27,14 +24,12 @@ observed signal.
 
 When platform data is missing or marked as unavailable, note it briefly and
 move on — do not dwell on it.
-"""
 
-REPORT_TEMPLATE = """\
+---
+
 You have been given the following social media and content analytics data for
 the past week/two weeks. Use it to produce a markdown report with exactly these
 sections:
-
----
 
 # Weekly Content Performance Report — {period}
 
@@ -108,36 +103,19 @@ def build_prompt(
     )
 
 
-def analyse(
+def save_prompt(
     collected_data: dict[str, Any],
     config: dict[str, Any],
     period: str,
-) -> str:
+    reports_dir: Path,
+) -> Path:
     """
-    Send collected data to Claude and return the markdown report as a string.
-    Raises on API failure (the caller decides whether to abort or skip).
+    Build the analysis prompt and write it to reports/prompt-{period}.txt.
+    Returns the path to the written file.
     """
-    api_key = config.get("anthropic_api_key", "")
-    if not api_key:
-        raise ValueError("anthropic_api_key is missing from config.yaml")
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    user_prompt = build_prompt(collected_data, config, period)
-
-    logger.info("Sending data to Claude (%s)…", MODEL)
-
-    message = client.messages.create(
-        model=MODEL,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-
-    report = message.content[0].text
-    logger.info(
-        "Analysis complete. Input tokens: %d, output tokens: %d",
-        message.usage.input_tokens,
-        message.usage.output_tokens,
-    )
-    return report
+    prompt = build_prompt(collected_data, config, period)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    path = reports_dir / f"prompt-{period}.txt"
+    path.write_text(prompt)
+    logger.info("Prompt saved → %s", path)
+    return path

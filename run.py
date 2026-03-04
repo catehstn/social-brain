@@ -43,7 +43,6 @@ REQUIRED_CONFIG_KEYS = [
     "buttondown_api_key",
     "jetpack_site",
     "jetpack_access_token",
-    "anthropic_api_key",
 ]
 
 
@@ -117,14 +116,6 @@ def load_latest_raw() -> tuple[dict, str]:
     with path.open() as f:
         return json.load(f), label
 
-
-def save_report(report: str, label: str) -> Path:
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORTS_DIR / f"{label}.md"
-    with path.open("w") as f:
-        f.write(report)
-    logger.info("Report saved → %s", path)
-    return path
 
 
 # ---------------------------------------------------------------------------
@@ -205,17 +196,11 @@ def main() -> None:
             "No collected data to analyse — the report will be minimal."
         )
 
-    logger.info("=== Analysing with Claude ===")
-    try:
-        from analyse import analyse
+    logger.info("=== Building analysis prompt ===")
+    from analyse import save_prompt
 
-        report = analyse(collected, config, period=label)
-    except Exception as exc:
-        logger.error("Analysis failed: %s", exc)
-        sys.exit(1)
-
-    save_report(report, label)
-    logger.info("=== Done. Report: reports/%s.md ===", label)
+    prompt_path = save_prompt(collected, config, period=label, reports_dir=REPORTS_DIR)
+    logger.info("=== Done. Paste %s into claude.ai to get your report ===", prompt_path)
 
 
 if __name__ == "__main__":

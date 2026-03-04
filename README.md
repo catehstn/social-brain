@@ -69,10 +69,12 @@ No API key needed — the public AppView API is used.
 
 ### Buttondown
 
+A **read-only** API key is sufficient — social-brain only reads emails and subscriber data, never writes.
+
 1. Log in to [buttondown.email](https://buttondown.email).
-2. Go to **Settings → API** (or visit `https://buttondown.email/settings/api`).
-3. Copy your **API key**.
-4. Paste it into `buttondown_api_key` in `config.yaml`.
+2. Go to **Settings → API keys** (or visit `https://buttondown.email/settings/api-keys`).
+3. Create a new key. Under permissions, enable read access for **Emails** and **Subscribers** only — no write access needed.
+4. Paste the key into `buttondown_api_key` in `config.yaml`.
 
 ### Jetpack / WordPress.com Stats
 
@@ -80,24 +82,17 @@ Your WordPress site must have the Jetpack plugin active with Stats enabled.
 
 **Get your access token:**
 
-1. Go to [developer.wordpress.com/apps](https://developer.wordpress.com/apps/) and create a new application (the redirect URL can be `http://localhost`).
+1. Go to [developer.wordpress.com/apps](https://developer.wordpress.com/apps/) and create a new application:
+   - **Type:** Native
+   - **Website URL:** `http://localhost`
+   - **Redirect URL:** `http://localhost`
 2. Note the **Client ID** and **Client Secret**.
-3. In a browser, open:
-   ```
-   https://public-api.wordpress.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost&response_type=code&scope=stats
-   ```
-4. Approve the authorisation. You'll be redirected to `http://localhost?code=AUTHORIZATION_CODE`.
-5. Exchange the code for a token:
+3. Use the password grant to get a token directly (use your WordPress.com **username**, not your email):
    ```bash
-   curl -X POST https://public-api.wordpress.com/oauth2/token \
-     -d "client_id=YOUR_CLIENT_ID" \
-     -d "client_secret=YOUR_CLIENT_SECRET" \
-     -d "redirect_uri=http://localhost" \
-     -d "code=AUTHORIZATION_CODE" \
-     -d "grant_type=authorization_code"
+   curl -X POST https://public-api.wordpress.com/oauth2/token -d "client_id=YOUR_CLIENT_ID" -d "client_secret=YOUR_CLIENT_SECRET" -d "grant_type=password" -d "username=YOUR_WP_USERNAME" -d "password=YOUR_WP_PASSWORD"
    ```
-6. Copy the `access_token` from the response and set it as `jetpack_access_token`.
-7. Set `jetpack_site` to your domain (e.g. `yourdomain.com`).
+4. Copy the `access_token` from the JSON response and set it as `jetpack_access_token`.
+5. Set `jetpack_site` to your domain (e.g. `yourdomain.com`).
 
 > **Tip:** A simpler alternative is to use an [application password](https://developer.wordpress.com/docs/wpcom-application-passwords/) if your plan supports it.
 

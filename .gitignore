@@ -46,6 +46,9 @@ pip-wheel-metadata/
 .env.*
 *.env
 
+# Claude Code local settings (machine-specific)
+.claude/
+
 # Editor / OS
 .DS_Store
 .idea/
