@@ -1,0 +1,58 @@
+# =============================================================================
+# SECRETS — never commit real credentials
+# =============================================================================
+# The live config (with real API keys) is always ignored.
+# Commit only config.example.yaml (placeholder values).
+config.yaml
+
+# =============================================================================
+# Runtime output
+# =============================================================================
+# Raw JSON snapshots contain your real post data — ignore by default.
+# To share a specific snapshot, use: git add -f data/weekly/2025-W22.json
+data/weekly/*.json
+
+# Reports contain your content analytics — ignore by default.
+# To share a report, use: git add -f reports/2025-W22.md
+reports/*.md
+
+# LinkedIn exports may contain personally identifiable information.
+linkedin_drops/*.csv
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+.env
+pip-wheel-metadata/
+*.so
+
+# =============================================================================
+# Environment / tooling
+# =============================================================================
+.env
+.env.*
+*.env
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs
+logs/
+*.log

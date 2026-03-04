@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# pre-commit hook — blocks commits that look like they contain real API keys.
+#
+# Activate once per clone:
+#   git config core.hooksPath .githooks
+#
+# Checks:
+#   1. config.yaml must never be staged
+#   2. LinkedIn CSV exports must never be staged
+#   3. Staged diff is scanned for credential-shaped strings (via check_secrets.py)
+
+set -euo pipefail
+
+RED='\033[0;31m'
+NC='\033[0m'
+
+FAILED=0
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ---------------------------------------------------------------------------
+# 1. Block config.yaml from ever being staged
+# ---------------------------------------------------------------------------
+if git diff --cached --name-only | grep -q '^config\.yaml$'; then
+    echo -e "${RED}BLOCKED:${NC} config.yaml is staged for commit."
+    echo "  This file contains your real API keys and must never be committed."
+    echo "  Run:  git reset HEAD config.yaml"
+    FAILED=1
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Block LinkedIn CSV exports
+# ---------------------------------------------------------------------------
+if git diff --cached --name-only | grep -qE '^linkedin_drops/.*\.csv$'; then
+    echo -e "${RED}BLOCKED:${NC} A LinkedIn CSV export is staged."
+    echo "  These files may contain personal data and are gitignored for good reason."
+    echo "  Run:  git reset HEAD linkedin_drops/"
+    FAILED=1
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Scan staged diff for credential patterns
+# ---------------------------------------------------------------------------
+SCAN_OUTPUT=$(git diff --cached -U0 | python3 "$HOOK_DIR/check_secrets.py" || true)
+if [[ -n "$SCAN_OUTPUT" ]]; then
+    echo -e "${RED}BLOCKED:${NC} Staged content looks like it contains real credentials:"
+    echo "$SCAN_OUTPUT"
+    echo ""
+    echo "  Ensure only placeholder values (e.g. YOUR_API_KEY) are in staged files."
+    echo "  If this is a false positive in a non-sensitive file, contact the maintainer."
+    FAILED=1
+fi
+
+# ---------------------------------------------------------------------------
+if [[ $FAILED -ne 0 ]]; then
+    echo ""
+    echo -e "${RED}Commit blocked.${NC} Fix the issues above and try again."
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,34 @@
+# social-brain configuration
+# Copy this file to config.yaml and fill in your real values.
+#   cp config.example.yaml config.yaml
+# config.yaml is gitignored — it will never be committed.
+
+# --- Mastodon ---
+mastodon_instance: hachyderm.io        # e.g. mastodon.social, fosstodon.org
+mastodon_handle: yourhandle            # without the @ or instance, just the username
+
+# --- Bluesky ---
+bluesky_handle: yourhandle.bsky.social # full handle including .bsky.social or custom domain
+
+# --- Buttondown ---
+buttondown_api_key: YOUR_BUTTONDOWN_API_KEY
+
+# --- Jetpack / WordPress.com Stats ---
+jetpack_site: yourdomain.com           # your WordPress site domain
+jetpack_access_token: YOUR_JETPACK_ACCESS_TOKEN
+
+# --- Anthropic ---
+anthropic_api_key: YOUR_ANTHROPIC_API_KEY
+
+# --- Content strategy ---
+content_pillars:
+  - Open source and developer tools
+  - Personal knowledge management
+  - Tech ethics and digital wellbeing
+  - Career and working in public
+
+weekly_goals:
+  - Grow newsletter subscriber count
+  - Drive traffic to latest blog post
+  - Increase engagement on Mastodon
+  - Experiment with short-form video on Bluesky
