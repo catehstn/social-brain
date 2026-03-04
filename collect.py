@@ -903,8 +903,13 @@ def _scrape_amazon_asin(client: httpx.Client, asin: str, marketplace: str) -> di
     else:
         reviews = None
 
-    # Best Sellers Rank: e.g. "#1,234 in Books" or "#159,450 in Audible Books"
-    rank_m = re.search(r"#([\d,]+)\s+in\s+(?:Books|Kindle|Audible)", html)
+    # Best Sellers Rank:
+    #   amazon.com:    "#1,234 in Books" / "#159,450 in Audible Books"
+    #   amazon.co.uk:  "Best Sellers Rank: </span> 419,623 in Kindle Store"
+    rank_m = (
+        re.search(r"#([\d,]+)\s+in\s+(?:Books|Kindle|Audible)", html)
+        or re.search(r"Best Sellers Rank:[^>]*>\s*([\d,]+)\s+in\s+", html)
+    )
     rank = int(rank_m.group(1).replace(",", "")) if rank_m else None
 
     return {
