@@ -129,6 +129,16 @@ Your Vercel project must have Web Analytics enabled.
 6. If the project belongs to a team, also set `vercel_team_id`:
    - Go to **Team Settings → General** and copy the **Team ID**.
 
+### Amazon
+
+No API key needed — social-brain scrapes public Amazon product pages.
+
+1. Find each edition of your book on Amazon and copy the ASIN from the URL (e.g. `amazon.com/dp/B0XXXXXXXXXX` → `B0XXXXXXXXXX`).
+2. Add them to `amazon_asins` in `config.yaml` (Kindle, paperback, audiobook — one per line).
+3. Set `amazon_marketplace` to your primary market (default: `amazon.com`; alternatives: `amazon.co.uk`, `amazon.de`, etc.).
+
+Collects: sales rank, star rating, and review count per edition. Amazon consolidates reviews across editions so the count will be the same for all formats.
+
 ### Substack
 
 Substack doesn't offer a public analytics API. Export your email analytics manually and drop the CSV into `substack_drops/`.
@@ -177,6 +187,7 @@ python run.py --platform buttondown
 python run.py --platform jetpack
 python run.py --platform linkedin
 python run.py --platform vercel
+python run.py --platform amazon
 ```
 
 ---
