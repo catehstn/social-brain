@@ -9,7 +9,6 @@ a single platform outage never kills the whole run).
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -27,8 +26,9 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _cutoff(weeks: int = 2) -> datetime:
-    return _utcnow() - timedelta(weeks=weeks)
+def _default_since() -> datetime:
+    """Default lookback: 2 weeks."""
+    return _utcnow() - timedelta(weeks=2)
 
 
 def _iso(dt: datetime) -> str:
@@ -39,14 +39,20 @@ def _iso(dt: datetime) -> str:
 # Mastodon
 # ---------------------------------------------------------------------------
 
-def collect_mastodon(instance: str, handle: str) -> dict[str, Any] | None:
+def collect_mastodon(
+    instance: str,
+    handle: str,
+    since: datetime | None = None,
+) -> dict[str, Any] | None:
     """
-    Collect the last 2 weeks of public posts for a Mastodon account.
-    Uses the public API — no authentication required.
+    Collect public posts for a Mastodon account back to `since`
+    (default: 2 weeks ago). Uses the public API — no authentication required.
     """
+    if since is None:
+        since = _default_since()
+
     try:
         base = f"https://{instance}"
-        # 1. Resolve handle → account id
         with httpx.Client(timeout=30) as client:
             r = client.get(
                 f"{base}/api/v1/accounts/lookup",
@@ -56,7 +62,6 @@ def collect_mastodon(instance: str, handle: str) -> dict[str, Any] | None:
             account = r.json()
             account_id = account["id"]
 
-        cutoff = _cutoff(weeks=2)
         posts: list[dict] = []
 
         with httpx.Client(timeout=30) as client:
@@ -79,7 +84,7 @@ def collect_mastodon(instance: str, handle: str) -> dict[str, Any] | None:
                     created = datetime.fromisoformat(
                         post["created_at"].replace("Z", "+00:00")
                     )
-                    if created < cutoff:
+                    if created < since:
                         batch = []  # signal outer loop to stop
                         break
                     posts.append(
@@ -98,12 +103,12 @@ def collect_mastodon(instance: str, handle: str) -> dict[str, Any] | None:
                     break
                 params["max_id"] = batch[-1]["id"]
 
-        logger.info("Mastodon: collected %d posts", len(posts))
+        logger.info("Mastodon: collected %d posts since %s", len(posts), _iso(since))
         return {
             "platform": "mastodon",
             "handle": f"@{handle}@{instance}",
             "collected_at": _iso(_utcnow()),
-            "period_weeks": 2,
+            "since": _iso(since),
             "posts": posts,
             "account": {
                 "followers": account.get("followers_count", 0),
@@ -121,18 +126,22 @@ def collect_mastodon(instance: str, handle: str) -> dict[str, Any] | None:
 # Bluesky
 # ---------------------------------------------------------------------------
 
-def collect_bluesky(handle: str) -> dict[str, Any] | None:
+def collect_bluesky(
+    handle: str,
+    since: datetime | None = None,
+) -> dict[str, Any] | None:
     """
-    Collect the last 2 weeks of posts for a Bluesky account.
-    Uses the public AppView API — no authentication required.
+    Collect posts for a Bluesky account back to `since`
+    (default: 2 weeks ago). Uses the public AppView API — no auth required.
     """
+    if since is None:
+        since = _default_since()
+
     try:
         base = "https://public.api.bsky.app/xrpc"
-        cutoff = _cutoff(weeks=2)
         posts: list[dict] = []
 
         with httpx.Client(timeout=30) as client:
-            # Resolve handle → DID
             r = client.get(
                 f"{base}/com.atproto.identity.resolveHandle",
                 params={"handle": handle},
@@ -140,7 +149,6 @@ def collect_bluesky(handle: str) -> dict[str, Any] | None:
             r.raise_for_status()
             did = r.json()["did"]
 
-            # Fetch author feed
             cursor: str | None = None
             while True:
                 params: dict[str, Any] = {"actor": did, "limit": 50}
@@ -169,7 +177,7 @@ def collect_bluesky(handle: str) -> dict[str, Any] | None:
                     except ValueError:
                         continue
 
-                    if created < cutoff:
+                    if created < since:
                         stop = True
                         break
 
@@ -177,7 +185,6 @@ def collect_bluesky(handle: str) -> dict[str, Any] | None:
                     if item.get("reason", {}).get("$type") == "app.bsky.feed.defs#reasonRepost":
                         continue
 
-                    counts = post.get("likeCount", 0), post.get("repostCount", 0), post.get("replyCount", 0)
                     posts.append(
                         {
                             "uri": post.get("uri", ""),
@@ -193,12 +200,12 @@ def collect_bluesky(handle: str) -> dict[str, Any] | None:
                     break
                 cursor = data["cursor"]
 
-        logger.info("Bluesky: collected %d posts", len(posts))
+        logger.info("Bluesky: collected %d posts since %s", len(posts), _iso(since))
         return {
             "platform": "bluesky",
             "handle": handle,
             "collected_at": _iso(_utcnow()),
-            "period_weeks": 2,
+            "since": _iso(since),
             "posts": posts,
         }
 
@@ -211,62 +218,101 @@ def collect_bluesky(handle: str) -> dict[str, Any] | None:
 # Buttondown
 # ---------------------------------------------------------------------------
 
-def collect_buttondown(api_key: str) -> dict[str, Any] | None:
+def collect_buttondown(
+    api_key: str,
+    since: datetime | None = None,
+) -> dict[str, Any] | None:
     """
-    Collect the last 4 newsletters from Buttondown with open/click analytics.
+    Collect sent newsletters from Buttondown with open/click analytics.
+    If `since` is provided, fetches all newsletters back to that date.
+    Default: last 4 newsletters.
     """
+    headers = {"Authorization": f"Token {api_key}"}
+    use_since = since is not None
+
     try:
-        headers = {"Authorization": f"Token {api_key}"}
         newsletters: list[dict] = []
 
         with httpx.Client(timeout=30, headers=headers) as client:
-            # Fetch recent emails (sorted newest-first by default)
-            r = client.get(
-                "https://api.buttondown.email/v1/emails",
-                params={"status": "sent", "page_size": 4},
-            )
-            r.raise_for_status()
-            emails = r.json().get("results", [])
-
-            for email in emails:
-                email_id = email["id"]
-                # Fetch analytics for each email
-                stats: dict = {}
-                try:
-                    ar = client.get(
-                        f"https://api.buttondown.email/v1/emails/{email_id}/analytics"
-                    )
-                    ar.raise_for_status()
-                    stats = ar.json()
-                except Exception as ae:
-                    logger.warning(
-                        "Could not fetch analytics for email %s: %s", email_id, ae
-                    )
-
-                newsletters.append(
-                    {
-                        "id": email_id,
-                        "subject": email.get("subject", ""),
-                        "send_date": email.get("publish_date") or email.get("creation_date", ""),
-                        "status": email.get("status", ""),
-                        "open_rate": stats.get("open_rate"),
-                        "click_rate": stats.get("click_rate"),
-                        "recipients": stats.get("recipients"),
-                    }
+            page = 1
+            while True:
+                r = client.get(
+                    "https://api.buttondown.email/v1/emails",
+                    params={"status": "sent", "page_size": 20, "page": page},
                 )
+                r.raise_for_status()
+                data = r.json()
+                emails = data.get("results", [])
+
+                if not emails:
+                    break
+
+                stop = False
+                for email in emails:
+                    send_date_str = email.get("publish_date") or email.get("creation_date", "")
+                    if use_since and send_date_str:
+                        try:
+                            send_date = datetime.fromisoformat(
+                                send_date_str.replace("Z", "+00:00")
+                            )
+                            if send_date < since:
+                                stop = True
+                                break
+                        except ValueError:
+                            pass
+
+                    email_id = email["id"]
+                    stats: dict = {}
+                    try:
+                        ar = client.get(
+                            f"https://api.buttondown.email/v1/emails/{email_id}/analytics"
+                        )
+                        ar.raise_for_status()
+                        stats = ar.json()
+                    except Exception as ae:
+                        logger.warning(
+                            "Could not fetch analytics for email %s: %s", email_id, ae
+                        )
+
+                    newsletters.append(
+                        {
+                            "id": email_id,
+                            "subject": email.get("subject", ""),
+                            "send_date": send_date_str,
+                            "status": email.get("status", ""),
+                            "open_rate": stats.get("open_rate"),
+                            "click_rate": stats.get("click_rate"),
+                            "recipients": stats.get("recipients"),
+                        }
+                    )
+
+                    # Without a since date, stop after 4
+                    if not use_since and len(newsletters) >= 4:
+                        stop = True
+                        break
+
+                if stop or not data.get("next"):
+                    break
+                page += 1
 
             # Current subscriber count
-            sr = client.get("https://api.buttondown.email/v1/subscribers", params={"page_size": 1})
+            sr = client.get(
+                "https://api.buttondown.email/v1/subscribers",
+                params={"page_size": 1},
+            )
             sr.raise_for_status()
             subscriber_count = sr.json().get("count", None)
 
         logger.info("Buttondown: collected %d newsletters", len(newsletters))
-        return {
+        result: dict[str, Any] = {
             "platform": "buttondown",
             "collected_at": _iso(_utcnow()),
             "subscriber_count": subscriber_count,
             "newsletters": newsletters,
         }
+        if use_since:
+            result["since"] = _iso(since)
+        return result
 
     except Exception as exc:
         logger.error("Buttondown collection failed: %s", exc)
@@ -277,35 +323,43 @@ def collect_buttondown(api_key: str) -> dict[str, Any] | None:
 # Jetpack / WordPress.com Stats
 # ---------------------------------------------------------------------------
 
-def collect_jetpack(site: str, access_token: str) -> dict[str, Any] | None:
+def collect_jetpack(
+    site: str,
+    access_token: str,
+    since: datetime | None = None,
+) -> dict[str, Any] | None:
     """
-    Collect last 2 weeks of daily page views and top posts from Jetpack Stats.
+    Collect daily page views and top posts from Jetpack Stats back to `since`
+    (default: 2 weeks ago).
     """
+    if since is None:
+        since = _default_since()
+
     try:
         headers = {"Authorization": f"Bearer {access_token}"}
         base = f"https://public-api.wordpress.com/rest/v1.1/sites/{site}/stats"
 
         today = _utcnow().date()
-        start = today - timedelta(weeks=2)
+        quantity = (today - since.date()).days + 1
 
         with httpx.Client(timeout=30, headers=headers) as client:
-            # Daily views
             r = client.get(
                 f"{base}/visits",
                 params={
                     "unit": "day",
-                    "quantity": 14,
+                    "quantity": quantity,
                     "date": today.isoformat(),
                 },
             )
             r.raise_for_status()
             visits_data = r.json()
 
-            # Top posts/pages
+            # For longer periods use "month" period for top posts to get a broader view
+            top_posts_period = "month" if quantity > 30 else "week"
             tp = client.get(
                 f"{base}/top-posts",
                 params={
-                    "period": "week",
+                    "period": top_posts_period,
                     "date": today.isoformat(),
                     "num": 10,
                     "max": 10,
@@ -331,7 +385,7 @@ def collect_jetpack(site: str, access_token: str) -> dict[str, Any] | None:
 
         total_views = sum(d["views"] for d in daily_views)
         logger.info(
-            "Jetpack: collected %d days of data, %d total views",
+            "Jetpack: collected %d days of data (%d total views)",
             len(daily_views),
             total_views,
         )
@@ -339,7 +393,7 @@ def collect_jetpack(site: str, access_token: str) -> dict[str, Any] | None:
             "platform": "jetpack",
             "site": site,
             "collected_at": _iso(_utcnow()),
-            "period_weeks": 2,
+            "since": _iso(since),
             "total_views": total_views,
             "daily_views": daily_views,
             "top_posts": top_posts,
@@ -354,16 +408,12 @@ def collect_jetpack(site: str, access_token: str) -> dict[str, Any] | None:
 # LinkedIn CSV
 # ---------------------------------------------------------------------------
 
-# LinkedIn's export columns vary slightly by export type; we normalise them.
 _LINKEDIN_COLUMN_MAP = {
-    # Post content/title
     "post title": "title",
     "content": "title",
     "post content": "title",
-    # Date
     "date": "date",
     "published date": "date",
-    # Metrics
     "impressions": "impressions",
     "clicks": "clicks",
     "reactions": "reactions",
@@ -395,23 +445,18 @@ def collect_linkedin(linkedin_drops_dir: str | Path = "linkedin_drops") -> dict[
     logger.info("LinkedIn: reading %s", csv_path)
 
     try:
-        # LinkedIn CSVs sometimes have a metadata header; skip non-data rows
         df = pd.read_csv(csv_path, skiprows=0)
 
-        # Normalise column names
         df.columns = [c.strip().lower() for c in df.columns]
         rename = {k: v for k, v in _LINKEDIN_COLUMN_MAP.items() if k in df.columns}
         df = df.rename(columns=rename)
 
-        # Keep only mapped columns that exist
         keep = [c for c in _LINKEDIN_COLUMN_MAP.values() if c in df.columns]
         df = df[keep].copy()
 
-        # Drop rows where all metric columns are NaN (often trailing summary rows)
         metric_cols = [c for c in ["impressions", "clicks", "reactions", "comments", "shares"] if c in df.columns]
         df = df.dropna(subset=metric_cols, how="all")
 
-        # Coerce numeric columns
         for col in metric_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
@@ -452,11 +497,15 @@ PLATFORM_COLLECTORS = {
 }
 
 
-def collect_all(config: dict, platform: str | None = None) -> dict[str, Any]:
+def collect_all(
+    config: dict,
+    platform: str | None = None,
+    since: datetime | None = None,
+) -> dict[str, Any]:
     """
     Run all (or a single) collector and return a dict keyed by platform name.
-    Failures are logged but do not raise; the platform key is omitted from
-    the result if collection fails.
+    `since` overrides the default lookback window for all date-based collectors.
+    Failures are logged but do not raise.
     """
     results: dict[str, Any] = {}
 
@@ -465,15 +514,17 @@ def collect_all(config: dict, platform: str | None = None) -> dict[str, Any]:
             data = collect_mastodon(
                 config.get("mastodon_instance", ""),
                 config.get("mastodon_handle", ""),
+                since=since,
             )
         elif name == "bluesky":
-            data = collect_bluesky(config.get("bluesky_handle", ""))
+            data = collect_bluesky(config.get("bluesky_handle", ""), since=since)
         elif name == "buttondown":
-            data = collect_buttondown(config.get("buttondown_api_key", ""))
+            data = collect_buttondown(config.get("buttondown_api_key", ""), since=since)
         elif name == "jetpack":
             data = collect_jetpack(
                 config.get("jetpack_site", ""),
                 config.get("jetpack_access_token", ""),
+                since=since,
             )
         elif name == "linkedin":
             data = collect_linkedin()

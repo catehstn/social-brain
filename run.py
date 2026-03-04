@@ -3,9 +3,10 @@
 run.py — entry point for social-brain.
 
 Usage:
-    python run.py                          # collect + analyse + save report
+    python run.py                          # collect + build prompt (default: 2 weeks)
+    python run.py --months 3               # collect 3 months of history
     python run.py --collect-only           # collect and save raw data only
-    python run.py --analyse-only           # analyse most recent saved raw data
+    python run.py --analyse-only           # build prompt from most recent saved data
     python run.py --platform mastodon      # collect only one platform
 """
 
@@ -15,7 +16,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -83,11 +84,14 @@ def load_config() -> dict:
 # Period label  →  e.g.  2025-W22
 # ---------------------------------------------------------------------------
 
-def week_label(dt: datetime | None = None) -> str:
+def week_label(dt: datetime | None = None, months: int | None = None) -> str:
     if dt is None:
         dt = datetime.now(timezone.utc)
     year, week, _ = dt.isocalendar()
-    return f"{year}-W{week:02d}"
+    label = f"{year}-W{week:02d}"
+    if months:
+        label += f"-{months}m"
+    return label
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +147,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Collect only one platform (cannot be combined with --analyse-only).",
     )
+    parser.add_argument(
+        "--months",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Collect N months of history instead of the default 2-week window.",
+    )
     return parser.parse_args()
 
 
@@ -154,7 +165,13 @@ def main() -> None:
         sys.exit(1)
 
     config = load_config()
-    label = week_label()
+
+    since: datetime | None = None
+    if args.months:
+        since = datetime.now(timezone.utc) - timedelta(days=args.months * 30)
+        logger.info("Lookback: %d month(s) (since %s)", args.months, since.date())
+
+    label = week_label(months=args.months)
 
     # ------------------------------------------------------------------
     # Collection
@@ -165,7 +182,7 @@ def main() -> None:
         from collect import collect_all
 
         logger.info("=== Collecting data (label: %s) ===", label)
-        collected = collect_all(config, platform=args.platform)
+        collected = collect_all(config, platform=args.platform, since=since)
 
         if not collected:
             logger.warning("No data was collected from any platform.")
