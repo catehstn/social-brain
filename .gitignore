@@ -18,6 +18,7 @@ reports/*.md
 
 # LinkedIn exports may contain personally identifiable information.
 linkedin_drops/*.csv
+linkedin_drops/*.xlsx
 
 # =============================================================================
 # Python

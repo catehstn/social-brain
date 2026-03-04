@@ -106,9 +106,9 @@ LinkedIn does not offer a public analytics API for individual creators. Instead,
 2. Click **Analytics** (on your profile page, below your header).
 3. Select **Posts** from the left sidebar.
 4. Click the **Export** button (top right of the posts table) → choose a date range covering the last 2 weeks.
-5. Download the CSV and move/copy it into the `linkedin_drops/` folder.
+5. Download the file (CSV or XLSX) and move/copy it into the `linkedin_drops/` folder.
 
-The tool always picks up the **most recently modified** CSV file in that folder. You can keep old exports there — they won't interfere.
+The tool always picks up the **most recently modified** CSV or XLSX file in that folder. You can keep old exports there — they won't interfere.
 
 ### Anthropic API
 
