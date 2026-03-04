@@ -15,7 +15,8 @@ social-brain/
 ├── run.py               # entry point
 ├── data/weekly/         # raw JSON snapshots (gitignored)
 ├── reports/             # markdown reports (gitignored)
-└── linkedin_drops/      # drop LinkedIn CSV exports here (gitignored)
+├── linkedin_drops/      # drop LinkedIn CSV/XLSX exports here
+└── substack_drops/      # drop Substack CSV exports here (gitignored)
 ```
 
 ---
@@ -110,11 +111,18 @@ LinkedIn does not offer a public analytics API for individual creators. Instead,
 
 The tool always picks up the **most recently modified** CSV or XLSX file in that folder. You can keep old exports there — they won't interfere.
 
-### Anthropic API
+### Substack
 
-1. Sign up at [console.anthropic.com](https://console.anthropic.com).
-2. Go to **API Keys** and create a new key.
-3. Paste it into `anthropic_api_key` in `config.yaml`.
+Substack doesn't offer a public analytics API. Export your email analytics manually and drop the CSV into `substack_drops/`.
+
+**How to export:**
+
+1. Go to your Substack dashboard and click **Stats**.
+2. Click **Emails** in the left sidebar.
+3. Click **Export** (top right) → download the CSV.
+4. Move/copy the file into the `substack_drops/` folder.
+
+The tool always picks up the **most recently modified** CSV in that folder. Expected columns: `Date`, `Subject`, `Recipients`, `Opens`, `Open rate`, `Clicks`, `Click rate`, `Unsubscribes`.
 
 ---
 

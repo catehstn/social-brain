@@ -637,6 +637,95 @@ def collect_linkedin(linkedin_drops_dir: str | Path = "linkedin_drops") -> dict[
 
 
 # ---------------------------------------------------------------------------
+# Substack CSV
+# ---------------------------------------------------------------------------
+
+# Substack email analytics export columns (case-insensitive)
+_SUBSTACK_COLUMN_MAP = {
+    "date": "date",
+    "subject": "subject",
+    "recipients": "recipients",
+    "opens": "opens",
+    "open rate": "open_rate",
+    "clicks": "clicks",
+    "click rate": "click_rate",
+    "unsubscribes": "unsubscribes",
+}
+
+
+def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[str, Any] | None:
+    """
+    Read the most recently modified Substack email analytics CSV export
+    from the substack_drops/ directory.
+    """
+    drops_path = Path(substack_drops_dir)
+    csv_files = sorted(
+        drops_path.glob("*.csv"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not csv_files:
+        logger.info("Substack: no CSV files found in %s — skipping", drops_path)
+        return None
+
+    csv_path = csv_files[0]
+    logger.info("Substack: reading %s", csv_path)
+
+    try:
+        df = pd.read_csv(csv_path)
+        df.columns = [c.strip().lower() for c in df.columns]
+        rename = {k: v for k, v in _SUBSTACK_COLUMN_MAP.items() if k in df.columns}
+        df = df.rename(columns=rename)
+
+        keep = [v for v in _SUBSTACK_COLUMN_MAP.values() if v in df.columns]
+        df = df[keep].copy()
+        df = df.dropna(how="all")
+
+        # Coerce numeric columns
+        int_cols = [c for c in ["recipients", "opens", "clicks", "unsubscribes"] if c in df.columns]
+        for col in int_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+        # Rate columns — strip % if present and convert to float
+        for col in ["open_rate", "click_rate"]:
+            if col in df.columns:
+                df[col] = (
+                    df[col].astype(str)
+                    .str.replace("%", "", regex=False)
+                    .str.strip()
+                    .pipe(pd.to_numeric, errors="coerce")
+                )
+                # Normalise: if stored as whole percent (e.g. 42.0), convert to 0–1
+                if df[col].dropna().gt(1).any():
+                    df[col] = (df[col] / 100).round(4)
+
+        emails = df.to_dict(orient="records")
+
+        summary = {
+            "total_recipients": int(df["recipients"].sum()) if "recipients" in df.columns else None,
+            "total_opens": int(df["opens"].sum()) if "opens" in df.columns else None,
+            "total_clicks": int(df["clicks"].sum()) if "clicks" in df.columns else None,
+            "total_unsubscribes": int(df["unsubscribes"].sum()) if "unsubscribes" in df.columns else None,
+            "avg_open_rate": round(float(df["open_rate"].mean()), 4) if "open_rate" in df.columns else None,
+            "avg_click_rate": round(float(df["click_rate"].mean()), 4) if "click_rate" in df.columns else None,
+        }
+
+        logger.info("Substack: parsed %d emails from %s", len(emails), csv_path.name)
+        return {
+            "platform": "substack",
+            "source_file": csv_path.name,
+            "collected_at": _iso(_utcnow()),
+            "summary": summary,
+            "emails": emails,
+        }
+
+    except Exception as exc:
+        logger.error("Substack CSV parsing failed (%s): %s", csv_path, exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -646,6 +735,7 @@ PLATFORM_COLLECTORS = {
     "buttondown": "collect_buttondown",
     "jetpack": "collect_jetpack",
     "linkedin": "collect_linkedin",
+    "substack": "collect_substack",
 }
 
 
@@ -680,6 +770,8 @@ def collect_all(
             )
         elif name == "linkedin":
             data = collect_linkedin()
+        elif name == "substack":
+            data = collect_substack()
         else:
             logger.error("Unknown platform: %s", name)
             return

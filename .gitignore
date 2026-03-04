@@ -20,6 +20,9 @@ reports/*.md
 linkedin_drops/*.csv
 linkedin_drops/*.xlsx
 
+# Substack exports (may contain subscriber data)
+substack_drops/*.csv
+
 # =============================================================================
 # Python
 # =============================================================================
