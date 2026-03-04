@@ -261,28 +261,25 @@ def collect_buttondown(
                         except ValueError:
                             pass
 
-                    email_id = email["id"]
-                    stats: dict = {}
-                    try:
-                        ar = client.get(
-                            f"https://api.buttondown.email/v1/emails/{email_id}/analytics"
-                        )
-                        ar.raise_for_status()
-                        stats = ar.json()
-                    except Exception as ae:
-                        logger.warning(
-                            "Could not fetch analytics for email %s: %s", email_id, ae
-                        )
+                    # Analytics are embedded in the email object
+                    stats = email.get("analytics", {})
+                    recipients = stats.get("recipients") or 0
+                    opens = stats.get("opens") or 0
+                    clicks = stats.get("clicks") or 0
 
                     newsletters.append(
                         {
-                            "id": email_id,
+                            "id": email["id"],
                             "subject": email.get("subject", ""),
                             "send_date": send_date_str,
-                            "status": email.get("status", ""),
-                            "open_rate": stats.get("open_rate"),
-                            "click_rate": stats.get("click_rate"),
-                            "recipients": stats.get("recipients"),
+                            "url": email.get("absolute_url", ""),
+                            "recipients": recipients,
+                            "opens": opens,
+                            "clicks": clicks,
+                            "open_rate": round(opens / recipients, 4) if recipients else None,
+                            "click_rate": round(clicks / recipients, 4) if recipients else None,
+                            "unsubscribes": stats.get("unsubscriptions") or 0,
+                            "new_subscribers": stats.get("subscriptions") or 0,
                         }
                     )
 
