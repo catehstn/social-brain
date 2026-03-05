@@ -1055,7 +1055,7 @@ def collect_upcoming(
             r = httpx.get(
                 f"https://public-api.wordpress.com/rest/v1.1/sites/{jetpack_site}/posts",
                 params={
-                    "status": "scheduled",
+                    "status": "future",  # WordPress uses 'future' for scheduled future posts
                     "fields": "ID,title,URL,date,content",
                     "number": 20,
                     "order_by": "date",
@@ -1065,7 +1065,6 @@ def collect_upcoming(
                 timeout=30,
             )
             r.raise_for_status()
-            now_iso = _utcnow().isoformat()
             raw_posts = r.json().get("posts", [])
             posts = [
                 {
@@ -1075,7 +1074,6 @@ def collect_upcoming(
                     "content": _strip_html(p.get("content", "")),
                 }
                 for p in raw_posts
-                if p.get("date", "") >= now_iso[:10]  # future posts only
             ]
             sources["wordpress"] = posts
             logger.info("Upcoming: %d scheduled WordPress posts", len(posts))
