@@ -140,6 +140,8 @@ scraped from the public URL
 sources aggregated across the period, sorted by views)
 - buttondown: subscriber_counts per newsletter; newsletters list with \
 open_rate, click_rate, unsubscribes per issue
+- substack: emails list with subject, date, recipients, opens, open_rate, \
+likes, comments, shares, new_signups, new_subscribers per issue
 - vercel: daily_views, visitors, top_pages, referrers, bounce_rate
 - amazon: by_marketplace dict — each marketplace has a list of book editions \
 with best_sellers_rank, rating, reviews

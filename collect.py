@@ -753,22 +753,14 @@ def collect_linkedin(linkedin_drops_dir: str | Path = "linkedin_drops") -> dict[
 # ---------------------------------------------------------------------------
 
 # Substack email analytics export columns (case-insensitive)
-_SUBSTACK_COLUMN_MAP = {
-    "date": "date",
-    "subject": "subject",
-    "recipients": "recipients",
-    "opens": "opens",
-    "open rate": "open_rate",
-    "clicks": "clicks",
-    "click rate": "click_rate",
-    "unsubscribes": "unsubscribes",
-}
-
-
 def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[str, Any] | None:
     """
     Read the most recently modified Substack email analytics CSV export
     from the substack_drops/ directory.
+
+    Handles both the current export format (title, post_date, delivered,
+    open_rate, likes, comments, shares) and the older format (Subject, Date,
+    Recipients, Opens, Open rate, Clicks, Unsubscribes).
     """
     drops_path = Path(substack_drops_dir)
     csv_files = sorted(
@@ -787,19 +779,52 @@ def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[
     try:
         df = pd.read_csv(csv_path)
         df.columns = [c.strip().lower() for c in df.columns]
-        rename = {k: v for k, v in _SUBSTACK_COLUMN_MAP.items() if k in df.columns}
-        df = df.rename(columns=rename)
 
-        keep = [v for v in _SUBSTACK_COLUMN_MAP.values() if v in df.columns]
+        # Detect format by presence of key columns
+        if "title" in df.columns:
+            # Current Substack export format
+            rename = {
+                "title": "subject",
+                "post_date": "date",
+                "delivered": "recipients",
+                "open_rate": "open_rate",
+                "opens": "opens",
+                "likes": "likes",
+                "comments": "comments",
+                "shares": "shares",
+                "signups_within_1_day": "new_signups",
+                "subscribes": "new_subscribers",
+            }
+        else:
+            # Older export format
+            rename = {
+                "subject": "subject",
+                "date": "date",
+                "recipients": "recipients",
+                "opens": "opens",
+                "open rate": "open_rate",
+                "clicks": "clicks",
+                "click rate": "click_rate",
+                "unsubscribes": "unsubscribes",
+            }
+
+        df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+        keep = [c for c in rename.values() if c in df.columns]
         df = df[keep].copy()
         df = df.dropna(how="all")
 
-        # Coerce numeric columns
-        int_cols = [c for c in ["recipients", "opens", "clicks", "unsubscribes"] if c in df.columns]
-        for col in int_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+        # Normalise date to YYYY-MM-DD
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-        # Rate columns — strip % if present and convert to float
+        # Coerce integer columns
+        int_cols = ["recipients", "opens", "clicks", "likes", "comments",
+                    "shares", "new_signups", "new_subscribers", "unsubscribes"]
+        for col in int_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+        # open_rate / click_rate: normalise to 0–1 if stored as whole percent
         for col in ["open_rate", "click_rate"]:
             if col in df.columns:
                 df[col] = (
@@ -808,7 +833,6 @@ def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[
                     .str.strip()
                     .pipe(pd.to_numeric, errors="coerce")
                 )
-                # Normalise: if stored as whole percent (e.g. 42.0), convert to 0–1
                 if df[col].dropna().gt(1).any():
                     df[col] = (df[col] / 100).round(4)
 
