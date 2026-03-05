@@ -27,6 +27,23 @@ amazon_marketplaces:           # collect from all listed marketplaces
   # - amazon.de
   # - amazon.ca
 
+# --- Mentions / inbound links ---
+monitored_domains:
+  - yourdomain.com         # blog or main site
+  - yourcoursedomain.com   # course site, etc.
+
+# Mastodon @ mention notifications (optional — requires an OAuth access token)
+# To get one: Mastodon → Settings → Development → New Application → read:notifications scope
+# mastodon_access_token: YOUR_MASTODON_ACCESS_TOKEN
+
+# Bluesky @ mention notifications (optional — use an App Password, not your main password)
+# To get one: Bluesky → Settings → Privacy and Security → App Passwords
+# bluesky_app_password: YOUR_BLUESKY_APP_PASSWORD
+
+# Google Search Console (optional — requires a service account JSON file)
+# See README for setup instructions.
+# gsc_credentials_file: /path/to/service-account.json
+
 # --- Buffer (optional) ---
 # Personal access token from buffer.com/manage/apps-and-extras/apps
 buffer_token: YOUR_BUFFER_TOKEN
