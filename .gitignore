@@ -63,3 +63,12 @@ pip-wheel-metadata/
 # Logs
 logs/
 *.log
+
+# =============================================================================
+# Dashboard (viz/)
+# =============================================================================
+# data.js is regenerated each period — commit per period if you want history,
+# or leave gitignored and keep only data.template.js.
+viz/data.js
+viz/node_modules/
+viz/dist/
