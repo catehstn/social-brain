@@ -181,10 +181,12 @@ def collect_mastodon(
 def collect_bluesky(
     handle: str,
     since: datetime | None = None,
+    app_password: str = "",
 ) -> dict[str, Any] | None:
     """
     Collect posts for a Bluesky account back to `since`
     (default: 2 weeks ago). Uses the public AppView API — no auth required.
+    If app_password is provided, also collects new follows during the period.
     """
     if since is None:
         since = _default_since()
@@ -270,13 +272,70 @@ def collect_bluesky(
                 cursor = data["cursor"]
 
         logger.info("Bluesky: collected %d posts since %s", len(posts), _iso(since))
-        return {
+
+        # New follows during the period (requires app password)
+        new_follows: list[dict] = []
+        if app_password:
+            auth_base = "https://bsky.social/xrpc"
+            with httpx.Client(timeout=30) as client:
+                r = client.post(
+                    f"{auth_base}/com.atproto.server.createSession",
+                    json={"identifier": handle, "password": app_password},
+                )
+                r.raise_for_status()
+                token = r.json()["accessJwt"]
+                auth_headers = {"Authorization": f"Bearer {token}"}
+
+                cursor_f: str | None = None
+                while True:
+                    params_f: dict[str, Any] = {"limit": 100, "reasons": "follow"}
+                    if cursor_f:
+                        params_f["cursor"] = cursor_f
+                    r = client.get(
+                        f"{auth_base}/app.bsky.notification.listNotifications",
+                        params=params_f,
+                        headers=auth_headers,
+                    )
+                    r.raise_for_status()
+                    data_f = r.json()
+                    notifs = data_f.get("notifications", [])
+                    if not notifs:
+                        break
+                    stop = False
+                    for n in notifs:
+                        if n.get("reason") != "follow":
+                            continue
+                        indexed = n.get("indexedAt", "")
+                        try:
+                            ts = datetime.fromisoformat(indexed.replace("Z", "+00:00"))
+                        except Exception:
+                            continue
+                        if ts < since:
+                            stop = True
+                            break
+                        author = n.get("author", {})
+                        new_follows.append({
+                            "followed_at": indexed,
+                            "handle": author.get("handle", ""),
+                            "display_name": author.get("displayName", ""),
+                            "followers": author.get("followersCount", 0),
+                        })
+                    if stop or not data_f.get("cursor"):
+                        break
+                    cursor_f = data_f["cursor"]
+            logger.info("Bluesky: collected %d new follows since %s", len(new_follows), _iso(since))
+
+        result: dict[str, Any] = {
             "platform": "bluesky",
             "handle": handle,
             "collected_at": _iso(_utcnow()),
             "since": _iso(since),
             "posts": posts,
         }
+        if new_follows:
+            result["new_follows"] = new_follows
+            result["new_follows_count"] = len(new_follows)
+        return result
 
     except Exception as exc:
         logger.error("Bluesky collection failed: %s", exc)
@@ -1532,7 +1591,11 @@ def collect_all(
                 access_token=config.get("mastodon_access_token", ""),
             )
         elif name == "bluesky":
-            data = collect_bluesky(config.get("bluesky_handle", ""), since=since)
+            data = collect_bluesky(
+                config.get("bluesky_handle", ""),
+                since=since,
+                app_password=config.get("bluesky_app_password", ""),
+            )
         elif name == "buttondown":
             data = collect_buttondown(config.get("buttondown_api_key", ""), since=since)
         elif name == "jetpack":
