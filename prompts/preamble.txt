@@ -57,6 +57,7 @@ Rules:
 - vercelDaily / vercelReferrers: if analytics were not running for the full period, note the actual start date in a comment near the data.
 - Use the actual site/newsletter names from the data in section titles and labels rather than the placeholder names in Dashboard.jsx.
 - The Web tab may cover multiple websites on different providers (Vercel, Jetpack/WordPress, etc.). Combine all web analytics into a single coherent view, labelling each site clearly.
+- When writing any text content into a JS double-quoted string literal, escape any double quotes in the content (replace " with \"). For example: `label: "She said \"hello\""`. This applies to post labels, titles, subjects, and any other text fields.
 
 Reference Dashboard.jsx:
 
