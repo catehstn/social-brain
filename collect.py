@@ -1584,26 +1584,40 @@ def collect_all(
 
     def _run(name: str) -> None:
         if name == "mastodon":
+            instance = config.get("mastodon_instance", "")
+            handle = config.get("mastodon_handle", "")
+            if not instance or not handle:
+                logger.info("Mastodon: mastodon_instance or mastodon_handle not configured — skipping")
+                return
             data = collect_mastodon(
-                config.get("mastodon_instance", ""),
-                config.get("mastodon_handle", ""),
+                instance,
+                handle,
                 since=since,
                 access_token=config.get("mastodon_access_token", ""),
             )
         elif name == "bluesky":
+            handle = config.get("bluesky_handle", "")
+            if not handle:
+                logger.info("Bluesky: bluesky_handle not configured — skipping")
+                return
             data = collect_bluesky(
-                config.get("bluesky_handle", ""),
+                handle,
                 since=since,
                 app_password=config.get("bluesky_app_password", ""),
             )
         elif name == "buttondown":
-            data = collect_buttondown(config.get("buttondown_api_key", ""), since=since)
+            api_key = config.get("buttondown_api_key", "")
+            if not api_key:
+                logger.info("Buttondown: buttondown_api_key not configured — skipping")
+                return
+            data = collect_buttondown(api_key, since=since)
         elif name == "jetpack":
-            data = collect_jetpack(
-                config.get("jetpack_site", ""),
-                config.get("jetpack_access_token", ""),
-                since=since,
-            )
+            jetpack_site = config.get("jetpack_site", "")
+            jetpack_token = config.get("jetpack_access_token", "")
+            if not jetpack_site or not jetpack_token:
+                logger.info("Jetpack: jetpack_site or jetpack_access_token not configured — skipping")
+                return
+            data = collect_jetpack(jetpack_site, jetpack_token, since=since)
         elif name == "linkedin":
             data = collect_linkedin()
         elif name == "substack":
@@ -1630,11 +1644,18 @@ def collect_all(
                 since=since,
             )
         elif name == "upcoming":
+            jetpack_site = config.get("jetpack_site", "")
+            jetpack_token = config.get("jetpack_access_token", "")
+            buttondown_api_key = config.get("buttondown_api_key", "")
+            buffer_token = config.get("buffer_token", "")
+            if not any([jetpack_site and jetpack_token, buttondown_api_key, buffer_token]):
+                logger.info("Upcoming: no sources configured — skipping")
+                return
             data = collect_upcoming(
-                jetpack_site=config.get("jetpack_site", ""),
-                jetpack_access_token=config.get("jetpack_access_token", ""),
-                buttondown_api_key=config.get("buttondown_api_key", ""),
-                buffer_token=config.get("buffer_token", ""),
+                jetpack_site=jetpack_site,
+                jetpack_access_token=jetpack_token,
+                buttondown_api_key=buttondown_api_key,
+                buffer_token=buffer_token,
             )
         elif name == "mentions":
             domains = config.get("monitored_domains", [])
