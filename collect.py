@@ -1018,6 +1018,140 @@ def collect_amazon(
 # Dispatcher
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Upcoming / scheduled content
+# ---------------------------------------------------------------------------
+
+def _strip_html(html: str) -> str:
+    """Remove HTML tags and decode common entities."""
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&lt;", "<", text)
+    text = re.sub(r"&gt;", ">", text)
+    text = re.sub(r"&#8217;", "'", text)
+    text = re.sub(r"&#8220;|&#8221;", '"', text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
+
+
+def collect_upcoming(
+    jetpack_site: str = "",
+    jetpack_access_token: str = "",
+    buttondown_api_key: str = "",
+    buffer_token: str = "",
+) -> dict[str, Any] | None:
+    """
+    Collect scheduled/upcoming content from:
+      - WordPress (scheduled posts via Jetpack API)
+      - Buttondown (scheduled emails)
+      - Buffer (queued social posts, if token configured)
+    """
+    sources: dict[str, Any] = {}
+
+    # --- WordPress scheduled posts ---
+    if jetpack_site and jetpack_access_token:
+        try:
+            r = httpx.get(
+                f"https://public-api.wordpress.com/rest/v1.1/sites/{jetpack_site}/posts",
+                params={
+                    "status": "scheduled",
+                    "fields": "ID,title,URL,date,content",
+                    "number": 20,
+                    "order_by": "date",
+                    "order": "ASC",
+                },
+                headers={"Authorization": f"Bearer {jetpack_access_token}"},
+                timeout=30,
+            )
+            r.raise_for_status()
+            now_iso = _utcnow().isoformat()
+            raw_posts = r.json().get("posts", [])
+            posts = [
+                {
+                    "title": p.get("title", ""),
+                    "url": p.get("URL", ""),
+                    "scheduled_date": p.get("date", ""),
+                    "content": _strip_html(p.get("content", "")),
+                }
+                for p in raw_posts
+                if p.get("date", "") >= now_iso[:10]  # future posts only
+            ]
+            sources["wordpress"] = posts
+            logger.info("Upcoming: %d scheduled WordPress posts", len(posts))
+        except Exception as exc:
+            logger.error("Upcoming/WordPress failed: %s", exc)
+
+    # --- Buttondown scheduled emails ---
+    if buttondown_api_key:
+        try:
+            r = httpx.get(
+                "https://api.buttondown.email/v1/emails",
+                params={"status": "scheduled"},
+                headers={"Authorization": f"Token {buttondown_api_key}"},
+                timeout=30,
+            )
+            r.raise_for_status()
+            raw_emails = r.json().get("results", [])
+            emails = [
+                {
+                    "subject": e.get("subject", ""),
+                    "scheduled_date": e.get("publish_date") or e.get("creation_date", ""),
+                    "content": _strip_html(e.get("body", "")),
+                }
+                for e in raw_emails
+            ]
+            sources["buttondown"] = emails
+            logger.info("Upcoming: %d scheduled Buttondown emails", len(emails))
+        except Exception as exc:
+            logger.error("Upcoming/Buttondown failed: %s", exc)
+
+    # --- Buffer queued posts ---
+    if buffer_token:
+        try:
+            # Fetch connected profiles
+            r = httpx.get(
+                "https://api.bufferapp.com/1/profiles.json",
+                params={"access_token": buffer_token},
+                timeout=30,
+            )
+            r.raise_for_status()
+            profiles = r.json()
+            queued: list[dict] = []
+            for profile in profiles:
+                pid = profile.get("id")
+                network = profile.get("service", "")
+                username = profile.get("formatted_username", "")
+                pr = httpx.get(
+                    f"https://api.bufferapp.com/1/profiles/{pid}/updates/pending.json",
+                    params={"access_token": buffer_token, "count": 100},
+                    timeout=30,
+                )
+                pr.raise_for_status()
+                updates = pr.json().get("updates", [])
+                for u in updates:
+                    queued.append({
+                        "platform": network,
+                        "account": username,
+                        "text": u.get("text", ""),
+                        "scheduled_at": u.get("due_time", ""),
+                        "media": u.get("media", {}),
+                    })
+            sources["buffer"] = queued
+            logger.info("Upcoming: %d Buffer queued posts across %d profiles", len(queued), len(profiles))
+        except Exception as exc:
+            logger.error("Upcoming/Buffer failed: %s", exc)
+
+    if not sources:
+        return None
+
+    return {
+        "platform": "upcoming",
+        "collected_at": _iso(_utcnow()),
+        "sources": sources,
+    }
+
+
 PLATFORM_COLLECTORS = {
     "mastodon": "collect_mastodon",
     "bluesky": "collect_bluesky",
@@ -1027,6 +1161,7 @@ PLATFORM_COLLECTORS = {
     "substack": "collect_substack",
     "vercel": "collect_vercel",
     "amazon": "collect_amazon",
+    "upcoming": "collect_upcoming",
 }
 
 
@@ -1083,6 +1218,13 @@ def collect_all(
                 vercel_project_id,
                 team_id=config.get("vercel_team_id") or None,
                 since=since,
+            )
+        elif name == "upcoming":
+            data = collect_upcoming(
+                jetpack_site=config.get("jetpack_site", ""),
+                jetpack_access_token=config.get("jetpack_access_token", ""),
+                buttondown_api_key=config.get("buttondown_api_key", ""),
+                buffer_token=config.get("buffer_token", ""),
             )
         else:
             logger.error("Unknown platform: %s", name)
