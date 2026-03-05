@@ -9,6 +9,7 @@ a single platform outage never kills the whole run).
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -1498,6 +1499,7 @@ def collect_mentions(
         try:
             from google.oauth2.service_account import Credentials
             from googleapiclient.discovery import build as gsc_build
+            gsc_credentials_file = os.path.expanduser(gsc_credentials_file)
 
             creds = Credentials.from_service_account_file(
                 gsc_credentials_file,
