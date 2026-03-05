@@ -1,6 +1,6 @@
 # social-brain
 
-A Python CLI tool that collects analytics data from your social, content, and publishing platforms, then builds a prompt for Claude to produce a performance report and a filled data file for the analytics dashboard.
+A Python CLI tool that collects analytics data from your social, content, and publishing platforms, then builds a prompt for Claude to produce a performance report and an interactive analytics dashboard that renders directly in claude.ai.
 
 ---
 
@@ -17,12 +17,8 @@ social-brain/
 ├── reports/              # generated prompt files (gitignored)
 ├── linkedin_drops/       # drop LinkedIn CSV/XLSX exports here
 ├── substack_drops/       # drop Substack CSV exports here (gitignored)
-└── viz/                  # analytics dashboard (React + Recharts)
-    ├── Dashboard.jsx     # component — never edit
-    ├── data.template.js  # schema — never edit
-    ├── data.js           # filled each period by Claude (gitignored)
-    ├── package.json
-    └── ...
+└── viz/
+    └── Dashboard.jsx     # reference template Claude models the artifact on — never edit
 ```
 
 ---
@@ -276,33 +272,18 @@ Paste the generated prompt file (`reports/prompt-YYYY-WNN.txt`) into claude.ai. 
 | **Next Period Suggestions** | 5 specific ideas, each justified by a data signal; complements already-scheduled content |
 | **Metrics Summary** | One table with key numbers per platform |
 
-### 2. `viz/data.js`
+### 2. Interactive dashboard artifact
 
-A filled data file for the analytics dashboard (see below). Copy the output into `viz/data.js`.
-
----
-
-## Analytics dashboard (`viz/`)
-
-A local React dashboard that visualises the period's data.
-
-**Run it:**
-
-```bash
-cd viz
-npm install       # first time only
-npm run dev       # opens at http://localhost:5173
-```
+Claude produces a self-contained React component that renders directly in claude.ai as an interactive artifact — no local server, no file copying.
 
 **Tabs:** Overview (funnel chart + headline stats) · Blog · LinkedIn · Mastodon · Courses · Book
 
 **Workflow each period:**
 1. Run `python run.py` (or `--months 3` for a quarterly view).
 2. Paste `reports/prompt-YYYY-WNN.txt` into claude.ai.
-3. Copy Claude's `data.js` output into `viz/data.js`.
-4. Open `http://localhost:5173`.
+3. The dashboard renders inline in the chat.
 
-`Dashboard.jsx` and `data.template.js` are committed and never edited. `data.js` is gitignored (regenerate each period, or commit per period if you want history).
+`viz/Dashboard.jsx` is the reference template Claude models the artifact on. Never edit it manually.
 
 ---
 

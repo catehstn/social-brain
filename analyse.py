@@ -4,7 +4,8 @@ writes it to reports/prompt-YYYY-WNN.txt for manual use with claude.ai.
 
 The prompt asks Claude for two outputs:
   1. A markdown performance report
-  2. A filled viz/data.js for the analytics dashboard
+  2. A self-contained React artifact that renders the analytics dashboard
+     inline in claude.ai (no local server needed)
 """
 
 from __future__ import annotations
@@ -19,13 +20,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Path to the dashboard data template — embedded in the prompt so Claude knows
-# exactly what schema to fill.
+# Dashboard reference component — embedded in the prompt so Claude knows the
+# exact structure, charts, tabs, and styling to reproduce as a self-contained artifact.
 VIZ_DIR = Path(__file__).parent / "viz"
-DATA_TEMPLATE_PATH = VIZ_DIR / "data.template.js"
+DASHBOARD_PATH = VIZ_DIR / "Dashboard.jsx"
 
 # ---------------------------------------------------------------------------
-# Prompt parts  (split so data.template.js can be inserted without escaping
+# Prompt parts  (split so Dashboard.jsx can be inserted without escaping
 # every JS brace as {{ / }} for Python's str.format)
 # ---------------------------------------------------------------------------
 
@@ -91,29 +92,39 @@ mentions in one row. For jetpack referrers, list the top 3 sources.
 
 ---
 
-## OUTPUT 2: viz/data.js
+## OUTPUT 2: Interactive dashboard artifact
 
-Produce a filled data.js by copying the template below and replacing every \
-REPLACE_WITH_* placeholder with real values from the JSON.
+Produce a single self-contained React component that renders the analytics \
+dashboard. Claude.ai will display it as an interactive artifact — no local \
+server or file copying needed.
 
 Rules:
-- Do not invent numbers. If a value is genuinely unavailable, use 0 or \
-"n/a" and add a comment explaining why.
-- Only include tabs/sections for platforms that have data. If a platform is \
-missing, set its arrays to [] and its STATS entries to value: "n/a".
-- blogDaily, linkedinDaily, vercelDaily: include all days in the period. \
-Use {{d: "Mon DD", ...}} format.
+- Start with `import React, {{ useState }} from "react"` and \
+`import {{ LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, \
+ResponsiveContainer, CartesianGrid, ReferenceLine, Legend, Cell, \
+ComposedChart }} from "recharts"` — recharts is available in artifacts.
+- Do NOT import from any external file. All data must be defined as constants \
+at the top of the file (PERIOD_LABEL, STATS, blogDaily, linkedinDaily, \
+mastodonPosts, vercelDaily, vercelReferrers, blogTopPosts, amazonBooks, \
+newsletterIssues, funnelNorm, funnelInsights).
+- Model the structure, tabs, charts, colours, and styling exactly on the \
+reference Dashboard.jsx below. Export a default function named Dashboard.
+- Replace all placeholder values with real numbers from the JSON. \
+Do not invent numbers. Use 0 or "n/a" for unavailable values.
+- Only include tabs for platforms that have data. Omit tabs entirely for \
+missing platforms rather than showing empty sections.
+- blogDaily, linkedinDaily, vercelDaily: include all days in the period \
+as {{d: "Mon DD", ...}} objects.
 - mastodonPosts: top 9 by total engagement (fav + boost + reply). If fewer \
-than 9 posts, include all.
-- vercelDaily / vercelReferrers: if Vercel analytics were not running for \
-the full period, add a comment noting the actual start date.
-- monthlyFunnel: aggregate daily data by calendar month. If the period ends \
-mid-month, label that entry "Mon (partial)".
-- funnelInsights: write exactly 4 items grounded in what the data shows for \
-this specific period. Each must cite a specific number or pattern.
-- Do not touch Dashboard.jsx.
+than 9, include all.
+- funnelNorm: aggregate by calendar month, normalise each metric 0–100. \
+Label partial months as "Mon (partial)".
+- funnelInsights: exactly 4 items, each citing a specific number or pattern \
+from the data.
+- vercelDaily / vercelReferrers: if analytics were not running for the full \
+period, note the actual start date in a comment near the data.
 
-data.template.js:
+Reference Dashboard.jsx:
 
 """
 
@@ -170,12 +181,12 @@ DATA (JSON):
 """
 
 
-def _read_viz_template() -> str:
-    """Return the contents of viz/data.template.js, or a placeholder if missing."""
-    if DATA_TEMPLATE_PATH.exists():
-        return DATA_TEMPLATE_PATH.read_text()
-    logger.warning("viz/data.template.js not found at %s — OUTPUT 2 will be incomplete", DATA_TEMPLATE_PATH)
-    return "// data.template.js not found — see viz/data.template.js in the repo\n"
+def _read_dashboard_reference() -> str:
+    """Return the contents of viz/Dashboard.jsx, or a placeholder if missing."""
+    if DASHBOARD_PATH.exists():
+        return DASHBOARD_PATH.read_text()
+    logger.warning("viz/Dashboard.jsx not found at %s — OUTPUT 2 will be incomplete", DASHBOARD_PATH)
+    return "// Dashboard.jsx not found — see viz/Dashboard.jsx in the repo\n"
 
 
 def _strip_html(text: str) -> str:
@@ -350,7 +361,7 @@ def build_prompt(
         period_window=period_window,
         period_id=period,
     )
-    template_js = _read_viz_template()
+    template_js = _read_dashboard_reference()
     suffix = _OUTPUT2_SUFFIX.format(
         period_id=period,
         period_window=period_window,

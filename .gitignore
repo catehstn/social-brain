@@ -67,8 +67,7 @@ logs/
 # =============================================================================
 # Dashboard (viz/)
 # =============================================================================
-# data.js is regenerated each period — commit per period if you want history,
-# or leave gitignored and keep only data.template.js.
-viz/data.js
+# Dashboard.jsx is the reference template committed to the repo.
+# Claude produces a self-contained artifact in claude.ai — no local build needed.
 viz/node_modules/
 viz/dist/
