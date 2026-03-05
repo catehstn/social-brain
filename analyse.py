@@ -70,7 +70,9 @@ section if there is genuinely nothing to note.
 ### 3. Cross-Platform Patterns
 Only include if data from two or more platforms is present. Look for topics, \
 formats, timing, or audience behaviours that appear consistently across \
-platforms. Omit if only one platform has data.
+platforms. If referrer or mention data is present, note which content or \
+topics drove inbound traffic or external discussion. Omit if only one \
+platform has data.
 
 ### 4. Next Period Suggestions
 Exactly 5 specific content ideas. For each:
@@ -83,7 +85,9 @@ planned and suggest complementary ideas rather than duplicating them.
 
 ### 5. Metrics Summary
 A single markdown table, one row per platform. Include only platforms in \
-the data. Use "n/a" for fields not available in that platform's data.
+the data. Use "n/a" for fields not available in that platform's data. \
+For mentions, summarise total HN hits, Mastodon mentions, and Bluesky \
+mentions in one row. For jetpack referrers, list the top 3 sources.
 
 ---
 
@@ -125,6 +129,26 @@ DATE_RANGE: {date_range}
 
 Data collected from:
 {platforms_available}
+
+Data shape notes (for interpreting the JSON):
+- mastodon / bluesky: posts sorted by engagement; each post has content/text, \
+favourites/likes, boosts/reposts, replies, has_attachment, attachment_types
+- linkedin: daily_engagement (date, impressions, engagements, new_followers); \
+top_posts_by_engagement and top_posts_by_impressions each include post text \
+scraped from the public URL
+- jetpack: daily_views, top_posts (views this period), referrers (traffic \
+sources aggregated across the period, sorted by views)
+- buttondown: subscriber_counts per newsletter; newsletters list with \
+open_rate, click_rate, unsubscribes per issue
+- vercel: daily_views, visitors, top_pages, referrers, bounce_rate
+- amazon: by_marketplace dict — each marketplace has a list of book editions \
+with best_sellers_rank, rating, reviews
+- upcoming: sources.wordpress (scheduled blog posts with title, date, content), \
+sources.buttondown (scheduled emails), sources.buffer (queued social posts \
+with platform, text, scheduled_at)
+- mentions: sources.hacker_news (stories/comments containing monitored domains, \
+with points and num_comments); sources.mastodon / sources.bluesky (@ mention \
+notifications); sources.google_search_console (top queries and pages by clicks)
 
 Goals for this period:
 {goals}
