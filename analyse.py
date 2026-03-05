@@ -131,8 +131,12 @@ Data collected from:
 {platforms_available}
 
 Data shape notes (for interpreting the JSON):
-- mastodon / bluesky: posts sorted by engagement; each post has content/text, \
-favourites/likes, boosts/reposts, replies, has_attachment, attachment_types
+- mastodon: posts sorted by engagement; each post has content, favourites, boosts, \
+replies, has_attachment, attachment_types; account.followers (current count); \
+new_follows (list of accounts that followed during the period, with followed_at, \
+account handle, display_name, followers count) and new_follows_count
+- bluesky: posts sorted by engagement; each post has text, likes, reposts, replies, \
+has_attachment, attachment_types
 - linkedin: daily_engagement (date, impressions, engagements, new_followers); \
 top_posts_by_engagement and top_posts_by_impressions each include post text \
 scraped from the public URL
