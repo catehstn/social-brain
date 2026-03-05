@@ -20,6 +20,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Prompt template files — edit these to customise the report/artifact instructions.
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+PREAMBLE_PATH = PROMPTS_DIR / "preamble.txt"
+SUFFIX_PATH = PROMPTS_DIR / "suffix.txt"
+
 # Dashboard reference component — embedded in the prompt so Claude knows the
 # exact structure, charts, tabs, and styling to reproduce as a self-contained artifact.
 VIZ_DIR = Path(__file__).parent / "viz"
@@ -30,155 +35,21 @@ DASHBOARD_PATH = VIZ_DIR / "Dashboard.jsx"
 # every JS brace as {{ / }} for Python's str.format)
 # ---------------------------------------------------------------------------
 
-_PREAMBLE = """\
-The following message contains pre-collected analytics data in JSON format. \
-All data has already been gathered — you do not need to make any API calls \
-or access any external services. Your only task is to read the data and \
-produce the report and dashboard data file described below.
 
-You are a content analytics expert. Your analysis must be grounded entirely \
-in the data provided. Do not invent numbers, do not speculate beyond what \
-the data supports, and do not pad with generic advice. Every recommendation \
-must be tied to a specific observed signal.
+def _read_preamble() -> str:
+    """Return the prompt preamble from prompts/preamble.txt."""
+    if PREAMBLE_PATH.exists():
+        return PREAMBLE_PATH.read_text()
+    logger.warning("prompts/preamble.txt not found — prompt will be incomplete")
+    return ""
 
-Only analyse the platforms listed under "Data collected from". Do not \
-reference, speculate about, or leave placeholder sections for any platform \
-not in that list.
 
----
-
-Analyse the following data and produce two outputs:
-
-## OUTPUT 1: Markdown report
-
-Title the report:
-# {period_window} Content Performance Report — {period_id}
-
-Include exactly these sections:
-
-### Data collected from
-List only the platforms present in the JSON.
-
-### 1. What Worked
-Top-performing content. For each item, explain *why* it likely performed \
-well based on the data — engagement type, topic, format, timing. Do not \
-list items without a reason.
-
-### 2. What Didn't
-Underperforming posts or patterns. Brief hypothesis for each. Skip this \
-section if there is genuinely nothing to note.
-
-### 3. Cross-Platform Patterns
-Only include if data from two or more platforms is present. Look for topics, \
-formats, timing, or audience behaviours that appear consistently across \
-platforms. If referrer or mention data is present, note which content or \
-topics drove inbound traffic or external discussion. Omit if only one \
-platform has data.
-
-### 4. Next Period Suggestions
-Exactly 5 specific content ideas. For each:
-- The idea (1–2 sentences)
-- Recommended platform(s) — only suggest platforms in the data
-- The signal that justifies it
-
-If upcoming scheduled content is listed in the data, treat those as already \
-planned and suggest complementary ideas rather than duplicating them.
-
-### 5. Metrics Summary
-A single markdown table, one row per platform. Include only platforms in \
-the data. Use "n/a" for fields not available in that platform's data. \
-For mentions, summarise total HN hits, Mastodon mentions, and Bluesky \
-mentions in one row. For jetpack referrers, list the top 3 sources.
-
----
-
-## OUTPUT 2: Interactive dashboard artifact
-
-Produce a single self-contained React component that renders the analytics \
-dashboard. Claude.ai will display it as an interactive artifact — no local \
-server or file copying needed.
-
-Rules:
-- Start with `import React, {{ useState }} from "react"` and \
-`import {{ LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, \
-ResponsiveContainer, CartesianGrid, ReferenceLine, Legend, Cell, \
-ComposedChart }} from "recharts"` — recharts is available in artifacts.
-- Do NOT import from any external file. All data must be defined as constants \
-at the top of the file (PERIOD_LABEL, STATS, blogDaily, linkedinDaily, \
-mastodonPosts, vercelDaily, vercelReferrers, blogTopPosts, amazonBooks, \
-newsletterIssues, funnelNorm, funnelInsights).
-- Model the structure, tabs, charts, colours, and styling exactly on the \
-reference Dashboard.jsx below. Export a default function named Dashboard.
-- Replace all placeholder values with real numbers from the JSON. \
-Do not invent numbers. Use 0 or "n/a" for unavailable values.
-- Only include tabs for platforms that have data. Omit tabs entirely for \
-missing platforms rather than showing empty sections.
-- blogDaily, linkedinDaily, vercelDaily: include all days in the period \
-as {{d: "Mon DD", ...}} objects.
-- mastodonPosts: top 9 by total engagement (fav + boost + reply). If fewer \
-than 9, include all.
-- funnelNorm: aggregate by calendar month, normalise each metric 0–100. \
-Label partial months as "Mon (partial)".
-- funnelInsights: exactly 4 items, each citing a specific number or pattern \
-from the data.
-- vercelDaily / vercelReferrers: if analytics were not running for the full \
-period, note the actual start date in a comment near the data.
-
-Reference Dashboard.jsx:
-
-"""
-
-_OUTPUT2_SUFFIX = """
-
----
-
-## Configuration
-
-PERIOD_ID: {period_id}
-PERIOD_WINDOW: {period_window}
-DATE_RANGE: {date_range}
-
-Data collected from:
-{platforms_available}
-
-Data shape notes (for interpreting the JSON):
-- mastodon: posts sorted by engagement; each post has content, favourites, boosts, \
-replies, has_attachment, attachment_types; account.followers (current count); \
-new_follows (list of accounts that followed during the period, with followed_at, \
-account handle, display_name, followers count) and new_follows_count
-- bluesky: posts sorted by engagement; each post has text, likes, reposts, replies, \
-has_attachment, attachment_types; new_follows (list with followed_at, handle, \
-display_name, followers count) and new_follows_count when app_password is configured
-- linkedin: daily_engagement (date, impressions, engagements, new_followers); \
-top_posts_by_engagement and top_posts_by_impressions each include post text \
-scraped from the public URL
-- jetpack: daily_views, top_posts (views this period), referrers (traffic \
-sources aggregated across the period, sorted by views)
-- buttondown: subscriber_counts per newsletter; newsletters list with \
-open_rate, click_rate, unsubscribes per issue
-- substack: emails list with subject, date, recipients, opens, open_rate, \
-likes, comments, shares, new_signups, new_subscribers per issue
-- vercel: daily_views, visitors, top_pages, referrers, bounce_rate
-- amazon: by_marketplace dict — each marketplace has a list of book editions \
-with best_sellers_rank, rating, reviews
-- upcoming: sources.wordpress (scheduled blog posts with title, date, content), \
-sources.buttondown (scheduled emails), sources.buffer (queued social posts \
-with platform, text, scheduled_at)
-- mentions: sources.hacker_news (stories/comments containing monitored domains, \
-with points and num_comments); sources.mastodon / sources.bluesky (@ mention \
-notifications); sources.google_search_console (top queries and pages by clicks)
-
-Goals for this period:
-{goals}
-
-Content pillars:
-{pillars}
-
-{upcoming_section}---
-
-DATA (JSON):
-{data_json}
-"""
+def _read_suffix() -> str:
+    """Return the prompt suffix template from prompts/suffix.txt."""
+    if SUFFIX_PATH.exists():
+        return SUFFIX_PATH.read_text()
+    logger.warning("prompts/suffix.txt not found — prompt will be incomplete")
+    return "{data_json}"
 
 
 def _read_dashboard_reference() -> str:
@@ -356,13 +227,13 @@ def build_prompt(
     data_json = json.dumps(trimmed, indent=2, default=str)
     upcoming_section = _format_upcoming_section(collected_data)
 
-    # --- Assemble prompt (template JS inserted as plain string to avoid brace conflicts) ---
-    preamble = _PREAMBLE.format(
+    # --- Assemble prompt (Dashboard.jsx inserted as plain string to avoid brace conflicts) ---
+    preamble = _read_preamble().format(
         period_window=period_window,
         period_id=period,
     )
-    template_js = _read_dashboard_reference()
-    suffix = _OUTPUT2_SUFFIX.format(
+    dashboard_ref = _read_dashboard_reference()
+    suffix = _read_suffix().format(
         period_id=period,
         period_window=period_window,
         date_range=date_range,
@@ -373,7 +244,7 @@ def build_prompt(
         data_json=data_json,
     )
 
-    return preamble + template_js + suffix
+    return preamble + dashboard_ref + suffix
 
 
 def save_prompt(

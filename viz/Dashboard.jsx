@@ -83,7 +83,7 @@ const Section = ({ title, children, note }) => (
 
 // ── TABS ──────────────────────────────────────────────────────────────────────
 
-const TABS = ["Overview", "Blog", "LinkedIn", "Mastodon", "Courses", "Book"];
+const TABS = ["Overview", "Blog", "LinkedIn", "Mastodon", "Web", "Book"];
 
 // ── MAIN ─────────────────────────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ export default function Dashboard() {
                   <Line type="monotone" dataKey="Engagement" stroke={C.accent} strokeWidth={2.5} dot={{ r: 4, fill: C.accent, strokeWidth: 0 }} />
                   <Line type="monotone" dataKey="Reach (LI impressions)" stroke={C.accent2} strokeWidth={2.5} dot={{ r: 4, fill: C.accent2, strokeWidth: 0 }} />
                   <Line type="monotone" dataKey="New followers" stroke={C.accent3} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: C.accent3, strokeWidth: 0 }} />
-                  <Line type="monotone" dataKey="Course visitors" stroke={C.purple} strokeWidth={2} strokeDasharray="3 2" dot={{ r: 3, fill: C.purple, strokeWidth: 0 }} />
+                  <Line type="monotone" dataKey="Web visitors" stroke={C.purple} strokeWidth={2} strokeDasharray="3 2" dot={{ r: 3, fill: C.purple, strokeWidth: 0 }} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
@@ -163,7 +163,7 @@ export default function Dashboard() {
                 { label: "💬 Engagement", colour: C.accent, note: "Fav + boosts + replies (Masto) + LI engagements" },
                 { label: "📡 Reach", colour: C.accent2, note: "LinkedIn impressions — biggest reach signal we have" },
                 { label: "👥 New followers", colour: C.accent3, note: "LinkedIn new followers — audience growth proxy" },
-                { label: "🎓 Course visitors", colour: C.purple, note: "driyourcareer.com — analytics enabled mid-period" },
+                { label: "🌐 Web visitors", colour: C.purple, note: "Website visitors across tracked sites" },
               ].map((item, i) => (
                 <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: item.colour, flexShrink: 0, marginTop: 3 }} />
@@ -344,15 +344,15 @@ export default function Dashboard() {
       )}
 
       {/* ── COURSES ── */}
-      {tab === "Courses" && (
+      {tab === "Web" && (
         <>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
-            {STATS.filter(s => ["Course site views","Unique visitors","Bounce rate","Purchases"].includes(s.label)).map((s, i) => (
-              <Stat key={i} label={s.label} value={s.value} sub={s.sub} accent={[C.accent, C.accent, C.accent3, C.accent2][i]} />
+            {STATS.filter(s => ["Web page views","Unique visitors","Bounce rate"].includes(s.label)).map((s, i) => (
+              <Stat key={i} label={s.label} value={s.value} sub={s.sub} accent={[C.accent, C.accent, C.accent3][i]} />
             ))}
           </div>
 
-          <Section title="driyourcareer.com Daily Traffic" note="from analytics start date">
+          <Section title="Daily Traffic" note="across tracked sites">
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "16px 8px" }}>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={vercelDaily} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
@@ -366,7 +366,7 @@ export default function Dashboard() {
             </div>
           </Section>
 
-          <Section title="Top Referrers to driyourcareer.com">
+          <Section title="Top Referrers">
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
               {vercelReferrers.map((r, i) => (
                 <div key={i} style={{
@@ -383,7 +383,7 @@ export default function Dashboard() {
             </div>
           </Section>
 
-          <Section title="Newsletter — What's My Job Again?">
+          <Section title="Newsletter Issues">
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
               {newsletterIssues.map((n, i) => (
                 <div key={i} style={{ padding: "14px 16px", borderBottom: i < newsletterIssues.length - 1 ? `1px solid ${C.border}` : "none" }}>

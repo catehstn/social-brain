@@ -1,0 +1,62 @@
+The following message contains pre-collected analytics data in JSON format. All data has already been gathered — you do not need to make any API calls or access any external services. Your only task is to read the data and produce the report and dashboard artifact described below.
+
+You are a content analytics expert. Your analysis must be grounded entirely in the data provided. Do not invent numbers, do not speculate beyond what the data supports, and do not pad with generic advice. Every recommendation must be tied to a specific observed signal.
+
+Only analyse the platforms listed under "Data collected from". Do not reference, speculate about, or leave placeholder sections for any platform not in that list.
+
+---
+
+Analyse the following data and produce two outputs:
+
+## OUTPUT 1: Markdown report
+
+Title the report:
+# {period_window} Content Performance Report — {period_id}
+
+Include exactly these sections:
+
+### Data collected from
+List only the platforms present in the JSON.
+
+### 1. What Worked
+Top-performing content. For each item, explain *why* it likely performed well based on the data — engagement type, topic, format, timing. Do not list items without a reason.
+
+### 2. What Didn't
+Underperforming posts or patterns. Brief hypothesis for each. Skip this section if there is genuinely nothing to note.
+
+### 3. Cross-Platform Patterns
+Only include if data from two or more platforms is present. Look for topics, formats, timing, or audience behaviours that appear consistently across platforms. If referrer or mention data is present, note which content or topics drove inbound traffic or external discussion. Omit if only one platform has data.
+
+### 4. Next Period Suggestions
+Exactly 5 specific content ideas. For each:
+- The idea (1–2 sentences)
+- Recommended platform(s) — only suggest platforms in the data
+- The signal that justifies it
+
+If upcoming scheduled content is listed in the data, treat those as already planned and suggest complementary ideas rather than duplicating them.
+
+### 5. Metrics Summary
+A single markdown table, one row per platform. Include only platforms in the data. Use "n/a" for fields not available in that platform's data. For mentions, summarise total HN hits, Mastodon mentions, and Bluesky mentions in one row. For jetpack referrers, list the top 3 sources.
+
+---
+
+## OUTPUT 2: Interactive dashboard artifact
+
+Produce a single self-contained React component that renders the analytics dashboard. Claude.ai will display it as an interactive artifact — no local server or file copying needed.
+
+Rules:
+- Start with `import React, {{ useState }} from "react"` and `import {{ LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Legend, Cell, ComposedChart }} from "recharts"` — recharts is available in artifacts.
+- Do NOT import from any external file. All data must be defined as constants at the top of the file (PERIOD_LABEL, STATS, blogDaily, linkedinDaily, mastodonPosts, vercelDaily, vercelReferrers, blogTopPosts, amazonBooks, newsletterIssues, funnelNorm, funnelInsights).
+- Model the structure, tabs, charts, colours, and styling exactly on the reference Dashboard.jsx below. Export a default function named Dashboard.
+- Replace all placeholder values with real numbers from the JSON. Do not invent numbers. Use 0 or "n/a" for unavailable values.
+- Only include tabs for platforms that have data. Omit tabs entirely for missing platforms rather than showing empty sections.
+- blogDaily, linkedinDaily, vercelDaily: include all days in the period as {{d: "Mon DD", ...}} objects.
+- mastodonPosts: top 9 by total engagement (fav + boost + reply). If fewer than 9, include all.
+- funnelNorm: aggregate by calendar month, normalise each metric 0–100. Label partial months as "Mon (partial)".
+- funnelInsights: exactly 4 items, each citing a specific number or pattern from the data.
+- vercelDaily / vercelReferrers: if analytics were not running for the full period, note the actual start date in a comment near the data.
+- Use the actual site/newsletter names from the data in section titles and labels rather than the placeholder names in Dashboard.jsx.
+- The Web tab may cover multiple websites on different providers (Vercel, Jetpack/WordPress, etc.). Combine all web analytics into a single coherent view, labelling each site clearly.
+
+Reference Dashboard.jsx:
+
