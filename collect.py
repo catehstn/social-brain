@@ -507,6 +507,33 @@ _LINKEDIN_COLUMN_MAP = {
 }
 
 
+def _fetch_linkedin_post_text(url: str) -> str | None:
+    """Fetch the post text from a public LinkedIn post URL via og:description."""
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        r = httpx.get(url, headers=headers, follow_redirects=True, timeout=15)
+        r.raise_for_status()
+        m = re.search(
+            r'<meta[^>]+property="og:description"[^>]+content="([^"]+)"',
+            r.text,
+        )
+        if m:
+            # Strip trailing comment count appended by LinkedIn e.g. " | 28 comments on LinkedIn"
+            text = re.sub(r"\s*\|\s*\d+ comments? on LinkedIn$", "", m.group(1)).strip()
+            return text
+    except Exception as exc:
+        logger.debug("LinkedIn post fetch failed (%s): %s", url, exc)
+    return None
+
+
 def _parse_linkedin_xlsx(path: Path) -> dict[str, Any]:
     """Parse the multi-sheet LinkedIn analytics XLSX export."""
     xl = pd.ExcelFile(path)
@@ -576,6 +603,24 @@ def _parse_linkedin_xlsx(path: Path) -> dict[str, Any]:
                             "date": str(date),
                             "impressions": int(imp) if pd.notna(imp) else None,
                         })
+
+        # Fetch post text for all unique URLs
+        all_urls = list({
+            p["url"]
+            for p in top_by_engagement + top_by_impressions
+        })
+        post_texts: dict[str, str | None] = {}
+        for i, post_url in enumerate(all_urls):
+            if i > 0:
+                time.sleep(1)
+            text = _fetch_linkedin_post_text(post_url)
+            post_texts[post_url] = text
+            logger.debug("LinkedIn post text fetched: %s chars", len(text) if text else 0)
+
+        for p in top_by_engagement:
+            p["text"] = post_texts.get(p["url"])
+        for p in top_by_impressions:
+            p["text"] = post_texts.get(p["url"])
 
         result["top_posts_by_engagement"] = top_by_engagement
         result["top_posts_by_impressions"] = top_by_impressions
