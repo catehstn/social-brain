@@ -27,6 +27,10 @@ amazon_marketplaces:           # collect from all listed marketplaces
   # - amazon.de
   # - amazon.ca
 
+# --- Buffer (optional) ---
+# Personal access token from buffer.com/manage/apps-and-extras/apps
+buffer_token: YOUR_BUFFER_TOKEN
+
 # --- Vercel Web Analytics (optional) ---
 # Leave blank to skip Vercel collection.
 vercel_token: YOUR_VERCEL_TOKEN        # Vercel account token (Settings → Tokens)

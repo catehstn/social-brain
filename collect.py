@@ -1104,39 +1104,61 @@ def collect_upcoming(
         except Exception as exc:
             logger.error("Upcoming/Buttondown failed: %s", exc)
 
-    # --- Buffer queued posts ---
+    # --- Buffer queued posts (GraphQL API) ---
     if buffer_token:
         try:
-            # Fetch connected profiles
-            r = httpx.get(
-                "https://api.bufferapp.com/1/profiles.json",
-                params={"access_token": buffer_token},
+            gql_headers = {
+                "Authorization": f"Bearer {buffer_token}",
+                "Content-Type": "application/json",
+            }
+            # Get org ID
+            r = httpx.post(
+                "https://api.buffer.com",
+                headers=gql_headers,
+                json={"query": "{ account { organizations { id } } }"},
                 timeout=30,
             )
             r.raise_for_status()
-            profiles = r.json()
-            queued: list[dict] = []
-            for profile in profiles:
-                pid = profile.get("id")
-                network = profile.get("service", "")
-                username = profile.get("formatted_username", "")
-                pr = httpx.get(
-                    f"https://api.bufferapp.com/1/profiles/{pid}/updates/pending.json",
-                    params={"access_token": buffer_token, "count": 100},
-                    timeout=30,
-                )
-                pr.raise_for_status()
-                updates = pr.json().get("updates", [])
-                for u in updates:
-                    queued.append({
-                        "platform": network,
-                        "account": username,
-                        "text": u.get("text", ""),
-                        "scheduled_at": u.get("due_time", ""),
-                        "media": u.get("media", {}),
-                    })
+            org_id = r.json()["data"]["account"]["organizations"][0]["id"]
+
+            # Fetch scheduled posts
+            r = httpx.post(
+                "https://api.buffer.com",
+                headers=gql_headers,
+                json={"query": f"""
+                    query {{
+                      posts(input: {{
+                        organizationId: "{org_id}",
+                        filter: {{ status: [scheduled, draft] }}
+                      }}, first: 100) {{
+                        edges {{
+                          node {{
+                            text
+                            dueAt
+                            status
+                            channelService
+                            channel {{ displayName }}
+                          }}
+                        }}
+                      }}
+                    }}
+                """},
+                timeout=30,
+            )
+            r.raise_for_status()
+            edges = r.json()["data"]["posts"]["edges"]
+            queued = [
+                {
+                    "platform": e["node"]["channelService"],
+                    "account": (e["node"].get("channel") or {}).get("displayName", ""),
+                    "text": e["node"].get("text", ""),
+                    "scheduled_at": e["node"].get("dueAt", ""),
+                    "status": e["node"].get("status", ""),
+                }
+                for e in edges
+            ]
             sources["buffer"] = queued
-            logger.info("Upcoming: %d Buffer queued posts across %d profiles", len(queued), len(profiles))
+            logger.info("Upcoming: %d Buffer queued posts", len(queued))
         except Exception as exc:
             logger.error("Upcoming/Buffer failed: %s", exc)
 
