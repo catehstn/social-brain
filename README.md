@@ -18,7 +18,7 @@ git config core.hooksPath .githooks   # enables the secret-scanning pre-commit h
 cp config.example.yaml config.yaml
 # edit config.yaml — see platform setup below
 python run.py
-# paste reports/prompt-YYYY-WNN.txt into claude.ai
+# paste reports/prompt-YYYY-WNN.txt into claude.ai — use Claude Opus for best results
 ```
 
 ---
@@ -173,7 +173,7 @@ python run.py --analyse-only     # build prompt from last saved data
 python run.py --platform mastodon  # single platform
 ```
 
-Paste `reports/prompt-YYYY-WNN.txt` into claude.ai to get the report and dashboard.
+Paste `reports/prompt-YYYY-WNN.txt` into claude.ai to get the report and dashboard. Use **Claude Opus** — it handles the cross-platform analysis and React artifact generation significantly better than Sonnet.
 
 ---
 
