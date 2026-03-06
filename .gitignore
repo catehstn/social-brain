@@ -12,6 +12,9 @@ config.yaml
 # To share a specific snapshot, use: git add -f data/weekly/2025-W22.json
 data/weekly/*.json
 
+# Persistent analytics store — contains your full history, gitignored.
+data/analytics.xlsx
+
 # Reports contain your content analytics — ignore by default.
 # To share a report, use: git add -f reports/2025-W22.md
 reports/*.md

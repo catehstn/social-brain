@@ -193,6 +193,32 @@ def main() -> None:
 
         save_raw(collected, label)
 
+        # ------------------------------------------------------------------
+        # Persistent store — upsert into analytics.xlsx
+        # ------------------------------------------------------------------
+        if collected and not args.platform:
+            from store import update as store_update, get_known_platforms, STORE_PATH
+            from datetime import timedelta
+
+            known = get_known_platforms()
+            new_platforms = set(collected.keys()) - known - {"upcoming", "mentions"}
+
+            if new_platforms and since is None:
+                # First time seeing these platforms — backfill 3 months
+                logger.info(
+                    "Store: new platform(s) detected (%s) — backfilling 3 months",
+                    ", ".join(sorted(new_platforms)),
+                )
+                backfill_since = datetime.now(timezone.utc) - timedelta(days=90)
+                backfill = collect_all(
+                    config,
+                    platform=None,
+                    since=backfill_since,
+                )
+                store_update(backfill)
+            else:
+                store_update(collected)
+
         if args.collect_only:
             logger.info("--collect-only: done.")
             return
