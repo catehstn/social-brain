@@ -187,6 +187,49 @@ Every run updates `data/analytics.xlsx` — a multi-sheet spreadsheet that accum
 
 ---
 
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph sources["Data sources"]
+        direction TB
+        S1[Mastodon]
+        S2[Bluesky]
+        S3[Buttondown]
+        S4[Jetpack / WordPress]
+        S5[LinkedIn CSV drop]
+        S6[Amazon]
+        S7[Vercel]
+        S8[Hacker News]
+        S9[Google Search Console]
+        S10[Buffer]
+        S11[Substack CSV drop]
+    end
+
+    CFG[config.yaml]
+    CLI[run.py]
+    COL[collect.py]
+    STO[store.py]
+    ANA[analyse.py]
+    XLS[(data/analytics.xlsx)]
+    JSON[(data/weekly/YYYY-WNN.json)]
+    TXT[reports/prompt-YYYY-WNN.txt]
+    AI([claude.ai])
+
+    CFG --> CLI
+    CLI --> COL
+    sources --> COL
+    COL --> JSON
+    JSON --> STO
+    STO --> XLS
+    JSON --> ANA
+    CFG --> ANA
+    ANA --> TXT
+    TXT -->|paste| AI
+```
+
+---
+
 ## Project structure
 
 ```
