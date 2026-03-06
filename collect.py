@@ -1508,32 +1508,44 @@ def collect_mentions(
             service = gsc_build("searchconsole", "v1", credentials=creds)
             gsc_results = []
             for domain in domains:
-                site_url = f"sc-domain:{domain}"
+                # Try domain property first, then URL-prefix variants
+                candidates = [
+                    f"sc-domain:{domain}",
+                    f"https://{domain}/",
+                    f"http://{domain}/",
+                ]
                 body = {
                     "startDate": since.strftime("%Y-%m-%d"),
                     "endDate": _utcnow().strftime("%Y-%m-%d"),
                     "dimensions": ["query", "page"],
                     "rowLimit": 25,
                 }
-                try:
-                    resp = (
-                        service.searchanalytics()
-                        .query(siteUrl=site_url, body=body)
-                        .execute()
-                    )
-                    for row in resp.get("rows", []):
-                        keys = row.get("keys", [])
-                        gsc_results.append({
-                            "domain": domain,
-                            "query": keys[0] if keys else "",
-                            "page": keys[1] if len(keys) > 1 else "",
-                            "clicks": row.get("clicks", 0),
-                            "impressions": row.get("impressions", 0),
-                            "ctr": round(row.get("ctr", 0) * 100, 1),
-                            "position": round(row.get("position", 0), 1),
-                        })
-                except Exception as exc:
-                    logger.warning("GSC query failed for %s: %s", domain, exc)
+                fetched = False
+                for site_url in candidates:
+                    try:
+                        resp = (
+                            service.searchanalytics()
+                            .query(siteUrl=site_url, body=body)
+                            .execute()
+                        )
+                        logger.info("GSC: using property %s for %s", site_url, domain)
+                        for row in resp.get("rows", []):
+                            keys = row.get("keys", [])
+                            gsc_results.append({
+                                "domain": domain,
+                                "query": keys[0] if keys else "",
+                                "page": keys[1] if len(keys) > 1 else "",
+                                "clicks": row.get("clicks", 0),
+                                "impressions": row.get("impressions", 0),
+                                "ctr": round(row.get("ctr", 0) * 100, 1),
+                                "position": round(row.get("position", 0), 1),
+                            })
+                        fetched = True
+                        break
+                    except Exception:
+                        continue
+                if not fetched:
+                    logger.warning("GSC query failed for %s: no accessible property found (tried domain, https, http)", domain)
             sources["google_search_console"] = gsc_results
             logger.info("Mentions: %d GSC rows across %d domains", len(gsc_results), len(domains))
         except ImportError:
