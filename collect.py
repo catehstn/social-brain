@@ -794,7 +794,7 @@ def _parse_linkedin_csv(path: Path) -> dict[str, Any]:
     df.columns = [c.strip().lower() for c in df.columns]
     rename = {k: v for k, v in _LINKEDIN_COLUMN_MAP.items() if k in df.columns}
     df = df.rename(columns=rename)
-    keep = [c for c in _LINKEDIN_COLUMN_MAP.values() if c in df.columns]
+    keep = list(dict.fromkeys(c for c in _LINKEDIN_COLUMN_MAP.values() if c in df.columns))
     df = df[keep].copy()
     metric_cols = [c for c in ["impressions", "clicks", "reactions", "comments", "shares"] if c in df.columns]
     df = df.dropna(subset=metric_cols, how="all")

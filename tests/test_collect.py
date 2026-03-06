@@ -1,0 +1,839 @@
+"""
+Tests for collect.py — all HTTP calls mocked with respx, no real config needed.
+"""
+from __future__ import annotations
+
+import csv
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+import respx
+
+from collect import (
+    collect_amazon,
+    collect_bluesky,
+    collect_buttondown,
+    collect_jetpack,
+    collect_linkedin,
+    collect_mastodon,
+    collect_mentions,
+    collect_vercel,
+    collect_all,
+)
+
+SINCE = datetime(2026, 2, 20, tzinfo=timezone.utc)
+RECENT = "2026-03-01T10:00:00Z"
+OLD = "2026-01-01T10:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# Mastodon
+# ---------------------------------------------------------------------------
+
+class TestCollectMastodon:
+    def _account(self, id: str = "123") -> dict:
+        return {"id": id, "followers_count": 500, "following_count": 100, "statuses_count": 200}
+
+    def _post(self, id: str = "p1", created_at: str = RECENT, attachments: list | None = None) -> dict:
+        return {
+            "id": id, "created_at": created_at, "content": "<p>Hello</p>",
+            "favourites_count": 5, "reblogs_count": 2, "replies_count": 1,
+            "media_attachments": attachments or [], "url": f"https://hachyderm.io/@cate/{id}",
+        }
+
+    def test_happy_path_returns_posts(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            side_effect=[
+                httpx.Response(200, json=[self._post("p1")]),
+                httpx.Response(200, json=[]),  # second page → stops loop
+            ]
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "mastodon"
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["id"] == "p1"
+        assert result["posts"][0]["favourites"] == 5
+
+    def test_lookup_failure_returns_none(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(404)
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result is None
+
+    def test_posts_before_since_excluded(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        # Old post stops pagination naturally (batch set to [])
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            return_value=httpx.Response(200, json=[self._post("p1"), self._post("p2", OLD)])
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["id"] == "p1"
+
+    def test_account_follower_count(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result["account"]["followers"] == 500
+
+    def test_no_access_token_no_follows(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE, access_token="")
+        assert "new_follows" not in result
+
+    def test_with_access_token_fetches_follows(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {"acct": "friend@mastodon.social",
+                  "display_name": "Friend", "followers_count": 100}},
+            ], headers={})
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE, access_token="tok")
+        assert "new_follows" in result
+        assert result["new_follows"][0]["account"] == "friend@mastodon.social"
+
+    def test_has_attachment_detected(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            side_effect=[
+                httpx.Response(200, json=[self._post("p1", attachments=[{"type": "image"}])]),
+                httpx.Response(200, json=[]),
+            ]
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result["posts"][0]["has_attachment"] is True
+
+
+# ---------------------------------------------------------------------------
+# Bluesky
+# ---------------------------------------------------------------------------
+
+class TestCollectBluesky:
+    def _feed_item(self, uri: str, created_at: str, text: str = "hello", reason: dict | None = None) -> dict:
+        item: dict = {
+            "post": {
+                "uri": uri,
+                "record": {"createdAt": created_at, "text": text},
+                "likeCount": 3, "repostCount": 1, "replyCount": 0,
+                "embed": {},
+            }
+        }
+        if reason:
+            item["reason"] = reason
+        return item
+
+    def test_happy_path_returns_posts(self, respx_mock):
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(200, json={"did": "did:plc:abc"})
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
+            return_value=httpx.Response(200, json={
+                "feed": [self._feed_item("at://did:plc:abc/post/1", RECENT)],
+                "cursor": None,
+            })
+        )
+        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "bluesky"
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["likes"] == 3
+
+    def test_failed_handle_resolve_returns_none(self, respx_mock):
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(400, json={"error": "invalid handle"})
+        )
+        result = collect_bluesky("bad.handle", since=SINCE)
+        assert result is None
+
+    def test_posts_before_since_excluded(self, respx_mock):
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(200, json={"did": "did:plc:abc"})
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
+            return_value=httpx.Response(200, json={
+                "feed": [
+                    self._feed_item("at://did:plc:abc/post/1", RECENT),
+                    self._feed_item("at://did:plc:abc/post/2", OLD),
+                ],
+                "cursor": None,
+            })
+        )
+        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        assert len(result["posts"]) == 1
+
+    def test_reposts_of_others_skipped(self, respx_mock):
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(200, json={"did": "did:plc:abc"})
+        )
+        repost_item = self._feed_item(
+            "at://did:plc:abc/post/1", RECENT,
+            reason={"$type": "app.bsky.feed.defs#reasonRepost"},
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
+            return_value=httpx.Response(200, json={"feed": [repost_item], "cursor": None})
+        )
+        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        assert len(result["posts"]) == 0
+
+    def test_cursor_pagination_followed(self, respx_mock):
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(200, json={"did": "did:plc:abc"})
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
+            side_effect=[
+                httpx.Response(200, json={
+                    "feed": [self._feed_item("at://did:plc:abc/post/1", RECENT)],
+                    "cursor": "cursor123",
+                }),
+                httpx.Response(200, json={
+                    "feed": [self._feed_item("at://did:plc:abc/post/2", RECENT, "second page")],
+                    "cursor": None,
+                }),
+            ]
+        )
+        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        assert len(result["posts"]) == 2
+
+    def test_no_app_password_no_follows(self, respx_mock):
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(200, json={"did": "did:plc:abc"})
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
+            return_value=httpx.Response(200, json={"feed": [], "cursor": None})
+        )
+        result = collect_bluesky("catehstn.bsky.social", since=SINCE, app_password="")
+        assert "new_follows" not in result
+
+
+# ---------------------------------------------------------------------------
+# Buttondown
+# ---------------------------------------------------------------------------
+
+class TestCollectButtondown:
+    def _newsletter(self, nl_id: str = "nl1", name: str = "my-newsletter", api_key: str = "key123") -> dict:
+        return {"id": nl_id, "name": name, "api_key": api_key}
+
+    def _email(self, email_id: str, subject: str, date: str) -> dict:
+        return {
+            "id": email_id, "subject": subject, "publish_date": date,
+            "analytics": {"recipients": 500, "opens": 150, "clicks": 30,
+                          "unsubscriptions": 2, "subscriptions": 5},
+        }
+
+    def test_happy_path_returns_emails(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={
+                "results": [self._email("e1", "Issue 1", RECENT)], "next": None,
+            })
+        )
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 520})
+        )
+        result = collect_buttondown("apikey", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "buttondown"
+        assert len(result["newsletters"]) == 1
+        assert result["newsletters"][0]["id"] == "e1"
+
+    def test_open_and_click_rates_calculated(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={
+                "results": [self._email("e1", "Issue 1", RECENT)], "next": None,
+            })
+        )
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 500})
+        )
+        result = collect_buttondown("apikey", since=SINCE)
+        email = result["newsletters"][0]
+        assert email["open_rate"] == round(150 / 500, 4)
+        assert email["click_rate"] == round(30 / 500, 4)
+
+    def test_subscriber_count_returned(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [], "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 750})
+        )
+        result = collect_buttondown("apikey", since=SINCE)
+        assert result["subscriber_counts"]["my-newsletter"] == 750
+
+    def test_no_newsletters_returns_empty_not_none(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        result = collect_buttondown("apikey", since=SINCE)
+        assert result is not None
+        assert result["newsletters"] == []
+
+    def test_api_error_returns_none(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(401, json={"error": "unauthorized"})
+        )
+        result = collect_buttondown("badkey", since=SINCE)
+        assert result is None
+
+    def test_emails_before_since_excluded(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={
+                "results": [
+                    self._email("e1", "Recent", RECENT),
+                    self._email("e2", "Old", OLD),
+                ],
+                "next": None,
+            })
+        )
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 500})
+        )
+        result = collect_buttondown("apikey", since=SINCE)
+        assert len(result["newsletters"]) == 1
+        assert result["newsletters"][0]["id"] == "e1"
+
+
+# ---------------------------------------------------------------------------
+# Jetpack
+# ---------------------------------------------------------------------------
+
+class TestCollectJetpack:
+    BASE = "https://public-api.wordpress.com/rest/v1.1/sites/cate.blog/stats"
+
+    def _mock_all(self, respx_mock, top_posts_data: dict | None = None):
+        respx_mock.get(f"{self.BASE}/visits").mock(
+            return_value=httpx.Response(200, json={"data": [["2026-03-01", 100], ["2026-03-02", 120]]})
+        )
+        respx_mock.get(f"{self.BASE}/top-posts").mock(
+            return_value=httpx.Response(200, json=top_posts_data or {"top-posts": [
+                {"href": "https://cate.blog/post-a", "title": "Post A", "views": 80},
+                {"href": "https://cate.blog/post-b", "title": "Post B", "views": 40},
+            ]})
+        )
+        respx_mock.get(f"{self.BASE}/referrers").mock(
+            return_value=httpx.Response(200, json={"days": {"2026-03-01": {"groups": [
+                {"name": "twitter.com", "total": 30},
+                {"name": "google.com", "total": 50},
+            ]}}})
+        )
+
+    def test_happy_path(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "jetpack"
+        assert len(result["daily_views"]) == 2
+        assert result["daily_views"][0] == {"date": "2026-03-01", "views": 100}
+
+    def test_top_posts_returned(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        assert len(result["top_posts"]) == 2
+        assert result["top_posts"][0]["href"] == "https://cate.blog/post-a"
+
+    def test_referrers_aggregated(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        names = {r["name"] for r in result["referrers"]}
+        assert "google.com" in names
+        assert "twitter.com" in names
+
+    def test_top_posts_days_format_aggregated(self, respx_mock):
+        days_format = {"days": {
+            "2026-03-01": {"postviews": [{"href": "https://cate.blog/a", "title": "A", "views": 50}]},
+            "2026-03-02": {"postviews": [{"href": "https://cate.blog/a", "title": "A", "views": 30}]},
+        }}
+        self._mock_all(respx_mock, top_posts_data=days_format)
+        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        assert len(result["top_posts"]) == 1
+        assert result["top_posts"][0]["views"] == 80  # 50 + 30 aggregated
+
+    def test_auth_failure_returns_none(self, respx_mock):
+        respx_mock.get(f"{self.BASE}/visits").mock(return_value=httpx.Response(401))
+        result = collect_jetpack("cate.blog", "badtoken", since=SINCE)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn (file-based — no HTTP needed)
+# ---------------------------------------------------------------------------
+
+class TestCollectLinkedin:
+    def _write_csv(self, path: Path, rows: list[dict]) -> None:
+        with path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def _csv_row(self, date: str = "2026-03-01", impressions: int = 500) -> dict:
+        return {"Post Title": "My Post", "Published Date": date, "Impressions": str(impressions),
+                "Clicks": "20", "Reactions": "10", "Comments": "3", "Shares": "2"}
+
+    def test_no_files_returns_none(self, tmp_path):
+        result = collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert result is None
+
+    def test_csv_parsed_correctly(self, tmp_path):
+        self._write_csv(tmp_path / "export.csv", [self._csv_row()])
+        result = collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert result is not None
+        assert result["platform"] == "linkedin"
+        assert result["posts"][0]["impressions"] == 500
+
+    def test_most_recently_modified_wins(self, tmp_path):
+        old_file = tmp_path / "old.csv"
+        new_file = tmp_path / "new.csv"
+        self._write_csv(old_file, [self._csv_row(impressions=100)])
+        time.sleep(0.01)
+        self._write_csv(new_file, [self._csv_row(impressions=999)])
+        result = collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert result["posts"][0]["impressions"] == 999
+
+    def test_result_includes_source_file_name(self, tmp_path):
+        self._write_csv(tmp_path / "my_export.csv", [self._csv_row()])
+        result = collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert result["source_file"] == "my_export.csv"
+
+    def test_summary_totals_computed(self, tmp_path):
+        self._write_csv(tmp_path / "export.csv", [
+            self._csv_row(impressions=100),
+            self._csv_row(date="2026-03-02", impressions=200),
+        ])
+        result = collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert result["summary"]["total_impressions"] == 300
+
+
+# ---------------------------------------------------------------------------
+# Amazon
+# ---------------------------------------------------------------------------
+
+AMAZON_HTML = """
+<html><body>
+<span id="productTitle">My Book Title</span>
+<span>4.5 out of 5 stars</span>
+<span aria-label="123 Reviews" class="acrCustomerReviewText">123 Reviews</span>
+<span>#1,234 in Books</span>
+</body></html>
+"""
+
+
+class TestCollectAmazon:
+    def test_happy_path_returns_data(self, respx_mock):
+        respx_mock.get("https://www.amazon.com/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        result = collect_amazon(["B0CW1MYCGK"], marketplaces=["amazon.com"])
+        assert result is not None
+        assert result["platform"] == "amazon"
+        book = result["by_marketplace"]["amazon.com"][0]
+        assert book["asin"] == "B0CW1MYCGK"
+        assert book["rating"] == 4.5
+        assert book["best_sellers_rank"] == 1234
+
+    def test_no_asins_returns_none(self):
+        result = collect_amazon([], marketplaces=["amazon.com"])
+        assert result is None
+
+    def test_404_for_one_asin_skipped(self, respx_mock, monkeypatch):
+        monkeypatch.setattr("collect.time.sleep", lambda _: None)
+        respx_mock.get("https://www.amazon.com/dp/BADASIN").mock(
+            return_value=httpx.Response(404)
+        )
+        respx_mock.get("https://www.amazon.com/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        result = collect_amazon(["BADASIN", "B0CW1MYCGK"], marketplaces=["amazon.com"])
+        assert result is not None
+        asins = [b["asin"] for b in result["by_marketplace"]["amazon.com"]]
+        assert "BADASIN" not in asins
+        assert "B0CW1MYCGK" in asins
+
+    def test_all_asins_fail_returns_none(self, respx_mock):
+        respx_mock.get("https://www.amazon.com/dp/BAD1").mock(return_value=httpx.Response(404))
+        result = collect_amazon(["BAD1"], marketplaces=["amazon.com"])
+        assert result is None
+
+    def test_multiple_marketplaces_all_queried(self, respx_mock):
+        respx_mock.get("https://www.amazon.com/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        result = collect_amazon(["B0CW1MYCGK"], marketplaces=["amazon.com", "amazon.co.uk"])
+        assert "amazon.com" in result["by_marketplace"]
+        assert "amazon.co.uk" in result["by_marketplace"]
+
+
+# ---------------------------------------------------------------------------
+# Vercel
+# ---------------------------------------------------------------------------
+
+class TestCollectVercel:
+    BASE = "https://vercel.com/api/web-analytics"
+
+    def _mock_all(self, respx_mock):
+        respx_mock.get(f"{self.BASE}/overview").mock(
+            return_value=httpx.Response(200, json={"total": 1000, "devices": 800, "bounceRate": 45.0})
+        )
+        respx_mock.get(f"{self.BASE}/timeseries").mock(
+            return_value=httpx.Response(200, json={"data": {"groups": {"all": [
+                {"key": "2026-03-01", "total": 500, "devices": 400},
+                {"key": "2026-03-02", "total": 500, "devices": 400},
+            ]}}}),
+        )
+        respx_mock.get(f"{self.BASE}/stats").mock(
+            return_value=httpx.Response(200, json={"data": [{"key": "/", "total": 300, "devices": 250}]})
+        )
+
+    def test_happy_path(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_vercel("tok", "my-project", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "vercel"
+        assert result["page_views"] == 1000
+        assert result["visitors"] == 800
+        assert len(result["daily"]) == 2
+
+    def test_daily_entries_mapped(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_vercel("tok", "my-project", since=SINCE)
+        assert result["daily"][0] == {"date": "2026-03-01", "page_views": 500, "visitors": 400}
+
+    def test_with_team_id_does_not_crash(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_vercel("tok", "my-project", team_id="team_abc", since=SINCE)
+        assert result is not None
+
+    def test_api_error_returns_none(self, respx_mock):
+        respx_mock.get(f"{self.BASE}/overview").mock(return_value=httpx.Response(401))
+        result = collect_vercel("badtok", "my-project", since=SINCE)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# collect_mentions
+# ---------------------------------------------------------------------------
+
+def _hn_hit(domain: str, tag: str) -> dict:
+    return {
+        "objectID": f"{domain}-{tag}-1",
+        "title": f"Found {domain}", "url": f"https://{domain}/post",
+        "points": 10, "num_comments": 2,
+        "created_at": RECENT[:10], "author": "someone",
+    }
+
+
+class TestCollectMentions:
+    def test_empty_domains_returns_none(self):
+        result = collect_mentions(domains=[], since=SINCE)
+        assert result is None
+
+    def test_single_domain_queries_hn_story_and_comment(self, respx_mock):
+        hn = respx_mock.get("https://hn.algolia.com/api/v1/search_by_date")
+        hn.mock(side_effect=lambda req: httpx.Response(200, json={"hits": [
+            _hn_hit(req.url.params["query"], req.url.params["tags"])
+        ]}))
+        result = collect_mentions(domains=["cate.blog"], since=SINCE)
+        assert hn.call_count == 2  # story + comment
+        assert result is not None
+
+    def test_multiple_domains_all_queried(self, respx_mock):
+        hn = respx_mock.get("https://hn.algolia.com/api/v1/search_by_date")
+        hn.mock(side_effect=lambda req: httpx.Response(200, json={"hits": [
+            _hn_hit(req.url.params["query"], req.url.params["tags"])
+        ]}))
+        domains = ["cate.blog", "driyourcareer.com", "whatsmyjob.club"]
+        collect_mentions(domains=domains, since=SINCE)
+        assert hn.call_count == len(domains) * 2
+
+    def test_each_domain_used_as_hn_query(self, respx_mock):
+        hn = respx_mock.get("https://hn.algolia.com/api/v1/search_by_date")
+        hn.mock(side_effect=lambda req: httpx.Response(200, json={"hits": [
+            _hn_hit(req.url.params["query"], req.url.params["tags"])
+        ]}))
+        domains = ["cate.blog", "driyourcareer.com"]
+        collect_mentions(domains=domains, since=SINCE)
+        queried = {req.url.params["query"] for req, _ in hn.calls}
+        assert queried == set(domains)
+
+    def test_hn_hit_not_matching_domain_filtered(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": [
+                {"objectID": "x1", "title": "Unrelated content", "url": "https://other.com/",
+                 "points": 5, "num_comments": 0, "created_at": RECENT[:10], "author": "user"},
+            ]})
+        )
+        result = collect_mentions(domains=["cate.blog"], since=SINCE)
+        assert result["sources"]["hacker_news"] == []
+
+    def test_no_mastodon_token_skips_mastodon(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="",
+        )
+        assert "mastodon" not in result["sources"]
+
+    def test_mastodon_mentions_fetched_with_token(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {"acct": "friend@m.social"},
+                 "status": {"content": "<p>great post</p>", "url": ""}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert "mastodon" in result["sources"]
+        assert result["sources"]["mastodon"][0]["from"] == "friend@m.social"
+
+    def test_mastodon_pagination_capped(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        next_link = '<https://hachyderm.io/api/v1/notifications?max_id=99>; rel="next"'
+        masto = respx_mock.get("https://hachyderm.io/api/v1/notifications")
+        masto.mock(return_value=httpx.Response(200, json=[
+            {"created_at": RECENT, "account": {"acct": "x@m.social"},
+             "status": {"content": "hi", "url": ""}}
+        ], headers={"Link": next_link}))
+        collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert masto.call_count <= 5
+
+    def test_no_bluesky_password_skips_bluesky(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            bluesky_handle="catehstn.bsky.social", bluesky_app_password="",
+        )
+        assert "bluesky" not in result["sources"]
+
+    def test_bluesky_mentions_fetched_with_password(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.post("https://bsky.social/xrpc/com.atproto.server.createSession").mock(
+            return_value=httpx.Response(200, json={"accessJwt": "jwt123"})
+        )
+        respx_mock.get("https://bsky.social/xrpc/app.bsky.notification.listNotifications").mock(
+            return_value=httpx.Response(200, json={"notifications": [
+                {"reason": "mention", "indexedAt": RECENT,
+                 "author": {"handle": "friend.bsky.social"},
+                 "record": {"text": "nice post"},
+                 "uri": "at://did:plc:x/app.bsky.feed.post/abc"},
+            ], "cursor": None})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            bluesky_handle="catehstn.bsky.social", bluesky_app_password="pass",
+        )
+        assert "bluesky" in result["sources"]
+        assert result["sources"]["bluesky"][0]["from"] == "friend.bsky.social"
+
+    def test_bluesky_non_mention_notifications_excluded(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.post("https://bsky.social/xrpc/com.atproto.server.createSession").mock(
+            return_value=httpx.Response(200, json={"accessJwt": "jwt123"})
+        )
+        respx_mock.get("https://bsky.social/xrpc/app.bsky.notification.listNotifications").mock(
+            return_value=httpx.Response(200, json={"notifications": [
+                {"reason": "like", "indexedAt": RECENT, "author": {"handle": "liker.bsky.social"},
+                 "record": {"text": ""}, "uri": "at://x"},
+                {"reason": "follow", "indexedAt": RECENT, "author": {"handle": "follower.bsky.social"},
+                 "record": {"text": ""}, "uri": "at://y"},
+            ], "cursor": None})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            bluesky_handle="catehstn.bsky.social", bluesky_app_password="pass",
+        )
+        assert result["sources"]["bluesky"] == []
+
+    def test_no_gsc_credentials_skips_gsc(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        result = collect_mentions(domains=["cate.blog"], since=SINCE, gsc_credentials_file="")
+        assert "google_search_console" not in result["sources"]
+
+    def test_gsc_domain_property_success(self, tmp_path, respx_mock):
+        creds_file = tmp_path / "creds.json"
+        creds_file.write_text("{}")
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        mock_service = MagicMock()
+        mock_service.searchanalytics().query().execute.return_value = {
+            "rows": [{"keys": ["engineering mgmt", "https://cate.blog/p"],
+                      "clicks": 5, "impressions": 100, "ctr": 0.05, "position": 8.0}]
+        }
+        with patch("google.oauth2.service_account.Credentials") as mock_creds, \
+             patch("googleapiclient.discovery.build", return_value=mock_service):
+            mock_creds.from_service_account_file.return_value = MagicMock()
+            result = collect_mentions(
+                domains=["cate.blog"], since=SINCE,
+                gsc_credentials_file=str(creds_file),
+            )
+        assert "google_search_console" in result["sources"]
+        assert result["sources"]["google_search_console"][0]["query"] == "engineering mgmt"
+
+    def test_gsc_all_properties_fail_warns_no_crash(self, tmp_path, respx_mock, caplog):
+        creds_file = tmp_path / "creds.json"
+        creds_file.write_text("{}")
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        mock_service = MagicMock()
+        mock_service.searchanalytics().query().execute.side_effect = Exception("403 Forbidden")
+        import logging
+        with patch("google.oauth2.service_account.Credentials") as mock_creds, \
+             patch("googleapiclient.discovery.build", return_value=mock_service), \
+             caplog.at_level(logging.WARNING, logger="collect"):
+            mock_creds.from_service_account_file.return_value = MagicMock()
+            result = collect_mentions(
+                domains=["cate.blog"], since=SINCE,
+                gsc_credentials_file=str(creds_file),
+            )
+        assert result is not None
+        assert result["sources"]["google_search_console"] == []
+        assert any("no accessible property" in r.message for r in caplog.records)
+
+    def test_gsc_queries_all_domains(self, tmp_path, respx_mock):
+        creds_file = tmp_path / "creds.json"
+        creds_file.write_text("{}")
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        queried_sites: list[str] = []
+
+        def fake_query(siteUrl, body):
+            queried_sites.append(siteUrl)
+            m = MagicMock()
+            m.execute.return_value = {"rows": []}
+            return m
+
+        mock_service = MagicMock()
+        mock_service.searchanalytics().query.side_effect = fake_query
+
+        domains = ["cate.blog", "driyourcareer.com", "whatsmyjob.club"]
+        with patch("google.oauth2.service_account.Credentials") as mock_creds, \
+             patch("googleapiclient.discovery.build", return_value=mock_service):
+            mock_creds.from_service_account_file.return_value = MagicMock()
+            collect_mentions(domains=domains, since=SINCE, gsc_credentials_file=str(creds_file))
+
+        # sc-domain:<domain> is tried first for each domain
+        queried_domain_names = {s.replace("sc-domain:", "").replace("https://", "").replace("http://", "").rstrip("/")
+                                 for s in queried_sites}
+        for d in domains:
+            assert d in queried_domain_names
+
+    def test_all_sources_fail_returns_none(self, respx_mock):
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            side_effect=httpx.ConnectError("connection failed")
+        )
+        result = collect_mentions(domains=["cate.blog"], since=SINCE)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# collect_all
+# ---------------------------------------------------------------------------
+
+class TestCollectAll:
+    def test_missing_mastodon_instance_skips(self):
+        result = collect_all({"mastodon_handle": "cate"}, platform="mastodon", since=SINCE)
+        assert "mastodon" not in result
+
+    def test_missing_bluesky_handle_skips(self):
+        result = collect_all({}, platform="bluesky", since=SINCE)
+        assert "bluesky" not in result
+
+    def test_missing_buttondown_key_skips(self):
+        result = collect_all({}, platform="buttondown", since=SINCE)
+        assert "buttondown" not in result
+
+    def test_missing_jetpack_token_skips(self):
+        result = collect_all({"jetpack_site": "cate.blog"}, platform="jetpack", since=SINCE)
+        assert "jetpack" not in result
+
+    def test_missing_amazon_asins_skips(self):
+        result = collect_all({}, platform="amazon", since=SINCE)
+        assert "amazon" not in result
+
+    def test_missing_vercel_token_skips(self):
+        result = collect_all({"vercel_project_id": "proj"}, platform="vercel", since=SINCE)
+        assert "vercel" not in result
+
+    def test_missing_monitored_domains_skips_mentions(self):
+        result = collect_all({}, platform="mentions", since=SINCE)
+        assert "mentions" not in result
+
+    def test_collector_returning_none_absent_from_results(self, monkeypatch):
+        monkeypatch.setattr("collect.collect_mastodon", lambda *a, **kw: None)
+        config = {"mastodon_instance": "hachyderm.io", "mastodon_handle": "cate"}
+        result = collect_all(config, platform="mastodon", since=SINCE)
+        assert "mastodon" not in result
+
+    def test_platform_filter_runs_only_one_collector(self, monkeypatch):
+        called = []
+        monkeypatch.setattr("collect.collect_mastodon", lambda *a, **kw: called.append("mastodon") or {})
+        monkeypatch.setattr("collect.collect_bluesky", lambda *a, **kw: called.append("bluesky") or {})
+        config = {
+            "mastodon_instance": "hachyderm.io", "mastodon_handle": "cate",
+            "bluesky_handle": "x.bsky.social",
+        }
+        collect_all(config, platform="mastodon", since=SINCE)
+        assert called == ["mastodon"]
