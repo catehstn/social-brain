@@ -22,6 +22,9 @@ Data shape notes (for interpreting the JSON):
 - upcoming: sources.wordpress (scheduled blog posts with title, date, content), sources.buttondown (scheduled emails), sources.buffer (queued social posts with platform, text, scheduled_at)
 - mentions: sources.hacker_news (stories/comments containing monitored domains, with points and num_comments); sources.mastodon / sources.bluesky (@ mention notifications); sources.google_search_console (top queries and pages by clicks)
 
+Primary focus (what matters most — use this to frame the analysis):
+{primary_focus}
+
 Goals for this period:
 {goals}
 

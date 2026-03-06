@@ -223,6 +223,8 @@ def build_prompt(
         f"- {g}" for g in config.get("weekly_goals", [])
     ) or "- (none specified)"
 
+    primary_focus = config.get("primary_focus", "") or "(none specified)"
+
     trimmed = _trim_data(collected_data)
     data_json = json.dumps(trimmed, indent=2, default=str)
     upcoming_section = _format_upcoming_section(collected_data)
@@ -238,6 +240,7 @@ def build_prompt(
         period_window=period_window,
         date_range=date_range,
         platforms_available=platforms_available,
+        primary_focus=primary_focus,
         goals=goals,
         pillars=pillars,
         upcoming_section=upcoming_section,
