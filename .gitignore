@@ -16,8 +16,7 @@ data/weekly/*.json
 data/analytics.xlsx
 
 # Reports contain your content analytics — ignore by default.
-# To share a report, use: git add -f reports/2025-W22.md
-reports/*.md
+reports/
 
 # LinkedIn exports may contain personally identifiable information.
 linkedin_drops/*.csv

@@ -1413,14 +1413,17 @@ def collect_mentions(
             notifications = []
             url = f"https://{mastodon_instance}/api/v1/notifications"
             params = {"types[]": "mention", "limit": 40}
+            max_pages = 5  # cap at 200 notifications to avoid rate limiting
+            pages_fetched = 0
             with httpx.Client(
                 timeout=30,
                 headers={"Authorization": f"Bearer {mastodon_access_token}"},
             ) as client:
-                while url:
+                while url and pages_fetched < max_pages:
                     r = client.get(url, params=params)
                     r.raise_for_status()
                     batch = r.json()
+                    pages_fetched += 1
                     for n in batch:
                         created = n.get("created_at", "")
                         if created and created < _iso(since):
