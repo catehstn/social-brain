@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 import run
+from run import since_last_run
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +201,56 @@ class TestLoadLatestRaw:
 
 
 # ---------------------------------------------------------------------------
+# since_last_run
+# ---------------------------------------------------------------------------
+
+class TestSinceLastRun:
+    def test_no_snapshots_returns_none(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        assert since_last_run() is None
+
+    def test_recent_snapshot_returns_none(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        # File modified now — within 2-week window
+        (data_dir / "2026-W10.json").write_text("{}")
+        assert since_last_run() is None
+
+    def test_old_snapshot_returns_its_mtime(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        path = data_dir / "2026-W01.json"
+        path.write_text("{}")
+        # Wind mtime back 30 days
+        old_ts = time.time() - (30 * 86400)
+        import os
+        os.utime(path, (old_ts, old_ts))
+        result = since_last_run()
+        assert result is not None
+        delta = datetime.now(timezone.utc) - result
+        assert delta.days >= 29
+
+    def test_uses_most_recent_snapshot(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        import os
+        # One old file
+        old = data_dir / "2026-W01.json"
+        old.write_text("{}")
+        os.utime(old, (time.time() - 30 * 86400,) * 2)
+        # One recent file
+        new = data_dir / "2026-W10.json"
+        new.write_text("{}")
+        # Most recent is new (within 2 weeks) → should return None
+        assert since_last_run() is None
+
+
+# ---------------------------------------------------------------------------
 # main() integration
 # ---------------------------------------------------------------------------
 
@@ -359,6 +410,30 @@ class TestMain:
         # since should be approximately 90 days ago
         delta = datetime.now(timezone.utc) - since
         assert 85 <= delta.days <= 95
+
+    def test_gap_detection_extends_since(self, tmp_path, monkeypatch):
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
+        # Write an old snapshot (30 days ago) to trigger gap detection
+        import os
+        old = data_dir / "2026-W01.json"
+        old.write_text("{}")
+        os.utime(old, (time.time() - 30 * 86400,) * 2)
+
+        mock_collect = MagicMock(return_value={"mastodon": {}})
+        mock_get_known = MagicMock(return_value={"mastodon"})
+
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known,
+                               STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()
+
+        since = mock_collect.call_args[1].get("since") or mock_collect.call_args[0][2]
+        assert since is not None
+        delta = datetime.now(timezone.utc) - since
+        assert delta.days >= 29
 
     def test_empty_collection_no_store_update(self, tmp_path, monkeypatch):
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])

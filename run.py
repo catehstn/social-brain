@@ -121,6 +121,21 @@ def load_latest_raw() -> tuple[dict, str]:
         return json.load(f), label
 
 
+def since_last_run() -> datetime | None:
+    """
+    Return the mtime of the most recent snapshot if it's older than 2 weeks,
+    so the caller can extend the lookback window to cover the gap.
+    Returns None if the last run was within the default window.
+    """
+    snapshots = sorted(DATA_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not snapshots:
+        return None
+    last_mtime = datetime.fromtimestamp(snapshots[0].stat().st_mtime, tz=timezone.utc)
+    if last_mtime < datetime.now(timezone.utc) - timedelta(weeks=2):
+        return last_mtime
+    return None
+
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -170,6 +185,11 @@ def main() -> None:
     if args.months:
         since = datetime.now(timezone.utc) - timedelta(days=args.months * 30)
         logger.info("Lookback: %d month(s) (since %s)", args.months, since.date())
+    elif not args.analyse_only:
+        gap = since_last_run()
+        if gap:
+            since = gap
+            logger.info("Last run was %s — extending lookback to cover gap", gap.date())
 
     label = week_label(months=args.months)
 
