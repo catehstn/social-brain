@@ -61,6 +61,8 @@ def _upsert(existing: pd.DataFrame, new: pd.DataFrame, keys: list[str]) -> pd.Da
     except KeyError:
         pass  # key columns not yet in existing sheet — safe to concat
 
+    if existing.empty:
+        return new.copy()
     return pd.concat([existing, new], ignore_index=True)
 
 
