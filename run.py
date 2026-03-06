@@ -198,7 +198,6 @@ def main() -> None:
         # ------------------------------------------------------------------
         if collected and not args.platform:
             from store import update as store_update, get_known_platforms, STORE_PATH
-            from datetime import timedelta
 
             known = get_known_platforms()
             new_platforms = set(collected.keys()) - known - {"upcoming", "mentions"}
