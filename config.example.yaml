@@ -24,8 +24,12 @@ amazon_asins:
 amazon_marketplaces:           # collect from all listed marketplaces
   - amazon.com
   - amazon.co.uk
+  - amazon.ca
+  - amazon.com.au
   # - amazon.de
-  # - amazon.ca
+  # - amazon.fr
+  # - amazon.co.jp
+  # - amazon.in
 
 # --- Mentions / inbound links ---
 monitored_domains:
