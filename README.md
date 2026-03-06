@@ -175,6 +175,8 @@ python run.py --platform mastodon  # single platform
 
 Paste `reports/prompt-YYYY-WNN.txt` into claude.ai to get the report and dashboard. Use **Claude Opus** — it handles the cross-platform analysis and React artifact generation significantly better than Sonnet.
 
+If you haven't run in more than two weeks, the lookback window is automatically extended to cover the gap — no manual `--months` needed.
+
 ---
 
 ## Persistent data store
@@ -242,11 +244,21 @@ social-brain/
 ├── run.py                # CLI entry point
 ├── prompts/              # editable prompt templates (preamble.txt, suffix.txt)
 ├── viz/Dashboard.jsx     # reference template Claude models the artifact on
+├── tests/                # pytest test suite (228 tests, no real credentials needed)
 ├── data/                 # raw JSON snapshots + analytics.xlsx (gitignored)
 ├── reports/              # generated prompt files (gitignored)
 ├── linkedin_drops/       # drop LinkedIn exports here
 └── substack_drops/       # drop Substack exports here (gitignored)
 ```
+
+Run the tests locally with:
+
+```bash
+pip install pytest pytest-timeout respx google-api-python-client google-auth
+pytest tests/
+```
+
+Tests run automatically on every push and pull request to `main` via GitHub Actions.
 
 ---
 
