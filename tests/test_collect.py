@@ -512,6 +512,148 @@ class TestCollectSubstack:
 
 
 # ---------------------------------------------------------------------------
+# O'Reilly (file-based — no HTTP needed)
+# ---------------------------------------------------------------------------
+
+# Minimal O'Reilly Payment Remittance Advice .eml — mirrors the real Oracle BI
+# Publisher format. "Amount Withheld" column is intentionally empty (no text node)
+# which is consistent with real files. Parser must handle 7-token data rows.
+OREILLY_EML_TEMPLATE = """\
+From: payables@oreilly.com
+To: test@example.com
+Subject: O'Reilly Payment Advice: paper document number - 999999
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html>
+<html><head><style>.x{{}}</style></head><body>
+<table>
+  <tr><td>Payment Remittance Advice</td></tr>
+  <tr><td>{payment_date_display}</td></tr>
+</table>
+<table>
+  <tr><td><b>Payment Reference Number</b></td><td>{payment_ref}</td></tr>
+  <tr><td><b>Paper Document Number</b></td><td>{doc_number}</td></tr>
+  <tr><td><b>Payment Date</b></td><td>{payment_date_display}</td></tr>
+  <tr><td><b>Payment Currency</b></td><td>{currency}</td></tr>
+  <tr><td><b>Payment Amount</b></td><td>{amount}</td></tr>
+</table>
+<table>
+  <tr><td><b>Remittance Detail</b></td></tr>
+  <tr>
+    <td><b>Document Reference Number</b></td>
+    <td><b>Document Date</b></td>
+    <td><b>Description</b></td>
+    <td><b>Document Amount</b></td>
+    <td><b>Document Currency</b></td>
+    <td><b>Amount Withheld</b></td>
+    <td><b>Discount Taken</b></td>
+    <td><b>Amount Paid</b></td>
+  </tr>
+  <tr>
+    <td>{doc_ref}</td>
+    <td>{doc_date}</td>
+    <td>ROYALTY STATEMENT</td>
+    <td>{amount}</td>
+    <td>{currency}</td>
+    <td></td>
+    <td>.00</td>
+    <td>{amount}</td>
+  </tr>
+  <tr><td></td><td></td><td></td><td></td><td><b>Total</b></td><td></td><td>.00</td><td>{amount}</td></tr>
+</table>
+</body></html>
+"""
+
+
+def _write_oreilly_eml(path, payment_date="Jan 15, 2026", amount="250.00",
+                       currency="USD", doc_number="210000",
+                       payment_ref="123456", doc_ref="AP-1234567",
+                       doc_date="14-Jan-26"):
+    content = OREILLY_EML_TEMPLATE.format(
+        payment_date_display=payment_date, amount=amount, currency=currency,
+        doc_number=doc_number, payment_ref=payment_ref,
+        doc_ref=doc_ref, doc_date=doc_date,
+    )
+    path.write_text(content)
+
+
+class TestCollectOreilly:
+    def test_no_files_returns_none(self, tmp_path):
+        from collect import collect_oreilly
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert result is None
+
+    def test_single_payment_parsed(self, tmp_path):
+        from collect import collect_oreilly
+        _write_oreilly_eml(tmp_path / "payment.eml")
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert result is not None
+        assert result["platform"] == "oreilly"
+        assert result["payment_count"] == 1
+        assert result["payments"][0]["amount"] == 250.0
+        assert result["payments"][0]["currency"] == "USD"
+        assert result["payments"][0]["payment_date"] == "2026-01-15"
+
+    def test_total_paid_summed_across_files(self, tmp_path):
+        from collect import collect_oreilly
+        _write_oreilly_eml(tmp_path / "a.eml", amount="100.00", doc_number="111111", payment_ref="111", doc_ref="AP-111")
+        _write_oreilly_eml(tmp_path / "b.eml", amount="200.00", doc_number="222222", payment_ref="222", doc_ref="AP-222")
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert result["total_paid"] == pytest.approx(300.0)
+        assert result["payment_count"] == 2
+
+    def test_payments_sorted_by_date(self, tmp_path):
+        from collect import collect_oreilly
+        _write_oreilly_eml(tmp_path / "b.eml", payment_date="Mar 01, 2026", doc_number="222222", payment_ref="222", doc_ref="AP-222")
+        _write_oreilly_eml(tmp_path / "a.eml", payment_date="Jan 15, 2026", doc_number="111111", payment_ref="111", doc_ref="AP-111")
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        dates = [p["payment_date"] for p in result["payments"]]
+        assert dates == sorted(dates)
+
+    def test_line_items_extracted(self, tmp_path):
+        from collect import collect_oreilly
+        _write_oreilly_eml(tmp_path / "payment.eml", amount="359.79", doc_ref="AP-1410830")
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        items = result["payments"][0]["line_items"]
+        assert len(items) == 1
+        assert items[0]["doc_ref"] == "AP-1410830"
+        assert items[0]["description"] == "ROYALTY STATEMENT"
+        assert items[0]["amount_paid"] == pytest.approx(359.79)
+
+    def test_source_file_name_recorded(self, tmp_path):
+        from collect import collect_oreilly
+        _write_oreilly_eml(tmp_path / "my_payment.eml")
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert result["payments"][0]["source_file"] == "my_payment.eml"
+
+    def test_currencies_collected(self, tmp_path):
+        from collect import collect_oreilly
+        _write_oreilly_eml(tmp_path / "payment.eml", currency="USD")
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert "USD" in result["currencies"]
+
+    def test_withheld_amount_parsed_when_present(self, tmp_path):
+        """US authors may have tax withheld — 8-token row with Amount Withheld populated."""
+        from collect import collect_oreilly
+        # Build an eml with a non-empty Amount Withheld cell
+        content = OREILLY_EML_TEMPLATE.replace(
+            "<td></td>\n    <td>.00</td>",
+            "<td>25.00</td>\n    <td>.00</td>",
+        )
+        (tmp_path / "payment.eml").write_text(content.format(
+            payment_date_display="Jan 15, 2026", amount="250.00", currency="USD",
+            doc_number="210000", payment_ref="123456",
+            doc_ref="AP-1234567", doc_date="14-Jan-26",
+        ))
+        result = collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert result is not None
+        items = result["payments"][0]["line_items"]
+        assert len(items) == 1
+        assert items[0]["amount_withheld"] == pytest.approx(25.0)
+
+
+# ---------------------------------------------------------------------------
 # Amazon
 # ---------------------------------------------------------------------------
 

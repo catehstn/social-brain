@@ -122,6 +122,17 @@ The most recently modified file in that folder is used each run. Post text is fe
 
 Expected columns: `Date`, `Subject`, `Recipients`, `Opens`, `Open rate`, `Clicks`, `Click rate`, `Unsubscribes`.
 
+**O'Reilly royalties**
+
+1. Find your O'Reilly "Payment Remittance Advice" emails and save each as an `.eml` file — in Gmail use the three-dot menu → "Download message"; in most desktop clients use File → Save As
+2. Drop all files into `oreilly_drops/` — unlike other file drops, all files are parsed, not just the latest, giving Claude the full royalty history
+
+Collects: payment date, amount, currency, and per-line-item detail across all statements.
+
+**What works:** O'Reilly's Oracle BI Publisher HTML email format. Tested against real statements. Handles both 7-column rows (Amount Withheld empty, typical for non-US authors) and 8-column rows (withholding tax present, typical for US authors).
+
+**What won't work:** PDF attachments, non-O'Reilly payment emails, or any format that isn't the standard O'Reilly HTML remittance. If O'Reilly changes their email template the parser will log a warning per file rather than crash.
+
 ---
 
 ### More involved setup
@@ -248,7 +259,8 @@ social-brain/
 ├── data/                 # raw JSON snapshots + analytics.xlsx (gitignored)
 ├── reports/              # generated prompt files (gitignored)
 ├── linkedin_drops/       # drop LinkedIn exports here
-└── substack_drops/       # drop Substack exports here (gitignored)
+├── substack_drops/       # drop Substack exports here (gitignored)
+└── oreilly_drops/        # drop O'Reilly payment .eml files here (gitignored)
 ```
 
 Run the tests locally with:

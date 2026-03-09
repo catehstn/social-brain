@@ -25,6 +25,9 @@ linkedin_drops/*.xlsx
 # Substack exports (may contain subscriber data)
 substack_drops/*.csv
 
+# O'Reilly payment emails (contain financial/personal data)
+oreilly_drops/*.eml
+
 # =============================================================================
 # Python
 # =============================================================================
