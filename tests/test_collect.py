@@ -357,6 +357,12 @@ class TestCollectJetpack:
                 {"name": "google.com", "total": 50},
             ]}}})
         )
+        respx_mock.get(f"{self.BASE}/followers", params={"type": "email", "max": 0}).mock(
+            return_value=httpx.Response(200, json={"total": 427, "subscribers": []})
+        )
+        respx_mock.get(f"{self.BASE}/followers", params={"type": "wpcom", "max": 0}).mock(
+            return_value=httpx.Response(200, json={"total": 52, "subscribers": []})
+        )
 
     def test_happy_path(self, respx_mock):
         self._mock_all(respx_mock)
@@ -388,6 +394,12 @@ class TestCollectJetpack:
         result = collect_jetpack("cate.blog", "token", since=SINCE)
         assert len(result["top_posts"]) == 1
         assert result["top_posts"][0]["views"] == 80  # 50 + 30 aggregated
+
+    def test_subscriber_counts_returned(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        assert result["email_subscribers"] == 427
+        assert result["wpcom_followers"] == 52
 
     def test_auth_failure_returns_none(self, respx_mock):
         respx_mock.get(f"{self.BASE}/visits").mock(return_value=httpx.Response(401))

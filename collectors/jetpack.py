@@ -67,6 +67,20 @@ def collect_jetpack(
             rr.raise_for_status()
             referrers_data = rr.json()
 
+            fe = client.get(
+                f"{base}/followers",
+                params={"type": "email", "max": 0},
+            )
+            fe.raise_for_status()
+            email_followers_data = fe.json()
+
+            fw = client.get(
+                f"{base}/followers",
+                params={"type": "wpcom", "max": 0},
+            )
+            fw.raise_for_status()
+            wpcom_followers_data = fw.json()
+
         daily_views = []
         for row in visits_data.get("data", []):
             if isinstance(row, list) and len(row) >= 2:
@@ -114,12 +128,17 @@ def collect_jetpack(
             reverse=True,
         )[:20]
 
+        email_subscribers = email_followers_data.get("total", 0)
+        wpcom_followers = wpcom_followers_data.get("total", 0)
+
         total_views = sum(d["views"] for d in daily_views)
         logger.info(
-            "Jetpack: collected %d days of data (%d total views, %d referrers)",
+            "Jetpack: collected %d days of data (%d total views, %d referrers, %d email subs, %d wpcom followers)",
             len(daily_views),
             total_views,
             len(referrers),
+            email_subscribers,
+            wpcom_followers,
         )
         return {
             "platform": "jetpack",
@@ -130,6 +149,8 @@ def collect_jetpack(
             "daily_views": daily_views,
             "top_posts": top_posts,
             "referrers": referrers,
+            "email_subscribers": email_subscribers,
+            "wpcom_followers": wpcom_followers,
         }
 
     except Exception as exc:

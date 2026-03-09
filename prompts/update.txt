@@ -23,7 +23,7 @@ Data shape notes (for interpreting the JSON):
 - mastodon: posts sorted by engagement; each post has content, favourites, boosts, replies, has_attachment, attachment_types; account.followers (current count); new_follows and new_follows_count
 - bluesky: posts sorted by engagement; each post has text, likes, reposts, replies; new_follows and new_follows_count when app_password is configured
 - linkedin: daily_engagement (date, impressions, engagements, new_followers); top_posts_by_engagement and top_posts_by_impressions with post text
-- jetpack: daily_views, top_posts, referrers
+- jetpack: daily_views, top_posts, referrers, email_subscribers, wpcom_followers
 - buttondown: subscriber_counts per newsletter; newsletters with open_rate, click_rate, unsubscribes
 - substack: emails with subject, date, recipients, opens, open_rate, likes, comments, shares
 - vercel: daily_views, visitors, top_pages, referrers
