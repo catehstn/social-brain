@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PREAMBLE_PATH = PROMPTS_DIR / "preamble.txt"
 SUFFIX_PATH = PROMPTS_DIR / "suffix.txt"
+UPDATE_PATH = PROMPTS_DIR / "update.txt"
 
 # Dashboard reference component — embedded in the prompt so Claude knows the
 # exact structure, charts, tabs, and styling to reproduce as a self-contained artifact.
@@ -250,20 +251,84 @@ def build_prompt(
     return preamble + dashboard_ref + suffix
 
 
+def build_update_prompt(
+    collected_data: dict[str, Any],
+    config: dict[str, Any],
+    period: str,
+    months: int | None = None,
+) -> str:
+    """
+    Build a compact follow-up prompt for use in the same claude.ai chat as the
+    original report. Instructs Claude to update the existing report and dashboard
+    in-place rather than producing a full new analysis from scratch.
+    """
+    if not UPDATE_PATH.exists():
+        logger.warning("prompts/update.txt not found — falling back to full prompt")
+        return build_prompt(collected_data, config, period, months=months)
+
+    period_window = f"{months}-Month" if months else "Weekly"
+
+    collected_at = ""
+    since_date = ""
+    for platform_data in collected_data.values():
+        if isinstance(platform_data, dict):
+            if not collected_at and platform_data.get("collected_at"):
+                collected_at = platform_data["collected_at"][:10]
+            if not since_date and platform_data.get("since"):
+                since_date = platform_data["since"][:10]
+    if not collected_at:
+        collected_at = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    def _fmt_date(iso: str) -> str:
+        try:
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            return dt.strftime("%b %-d %Y")
+        except Exception:
+            return iso
+
+    date_range = f"{_fmt_date(since_date)} – {_fmt_date(collected_at)}" if since_date else collected_at
+    platforms_available = (
+        "\n".join(f"- {p}" for p in collected_data if p != "upcoming")
+        if collected_data else "- (no data collected)"
+    )
+    primary_focus = config.get("primary_focus", "") or "(none specified)"
+    upcoming_section = _format_upcoming_section(collected_data)
+    trimmed = _trim_data(collected_data)
+    data_json = json.dumps(trimmed, indent=2, default=str)
+
+    return UPDATE_PATH.read_text().format(
+        period_id=period,
+        period_window=period_window,
+        date_range=date_range,
+        platforms_available=platforms_available,
+        primary_focus=primary_focus,
+        upcoming_section=upcoming_section,
+        data_json=data_json,
+    )
+
+
 def save_prompt(
     collected_data: dict[str, Any],
     config: dict[str, Any],
     period: str,
     reports_dir: Path,
     months: int | None = None,
+    update: bool = False,
 ) -> Path:
     """
-    Build the analysis prompt and write it to reports/prompt-{period}.txt.
+    Build the analysis prompt and write it to reports/.
+    If update=True, generates a compact follow-up prompt (prompt-{period}-update.txt)
+    for use in the same claude.ai chat as the original report.
     Returns the path to the written file.
     """
-    prompt = build_prompt(collected_data, config, period, months=months)
+    if update:
+        prompt = build_update_prompt(collected_data, config, period, months=months)
+        filename = f"prompt-{period}-update.txt"
+    else:
+        prompt = build_prompt(collected_data, config, period, months=months)
+        filename = f"prompt-{period}.txt"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    path = reports_dir / f"prompt-{period}.txt"
+    path = reports_dir / filename
     path.write_text(prompt)
     logger.info("Prompt saved → %s (%d chars)", path, len(prompt))
     return path
