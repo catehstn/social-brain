@@ -23,7 +23,7 @@ Include exactly these sections:
 List only the platforms present in the JSON.
 
 ### 1. What Worked
-Top-performing content. For each item, explain *why* it likely performed well based on the data — engagement type, topic, format, timing. Do not list items without a reason. If amazon data is present, include book sales momentum here — note the best rank achieved and any editions or marketplaces performing notably well.
+Top-performing content. For each item, explain *why* it likely performed well based on the data — engagement type, topic, format, timing. Do not list items without a reason. If oreilly data is present, include book royalties here — summarise total paid and any notable line items.
 
 ### 2. What Didn't
 Underperforming posts or patterns. Brief hypothesis for each. Skip this section if there is genuinely nothing to note.
@@ -40,7 +40,7 @@ Exactly 5 specific content ideas. For each:
 If upcoming scheduled content is listed in the data, treat those as already planned and suggest complementary ideas rather than duplicating them.
 
 ### 5. Metrics Summary
-A single markdown table, one row per platform. Include only platforms in the data. Use "n/a" for fields not available in that platform's data. For mentions, summarise total HN hits, Mastodon mentions, and Bluesky mentions in one row. For jetpack referrers, list the top 3 sources. For amazon, include the best bestseller rank achieved across all editions and marketplaces, plus review count — treat rank as the primary book sales signal.
+A single markdown table, one row per platform. Include only platforms in the data. Use "n/a" for fields not available in that platform's data. For mentions, summarise total HN hits, Mastodon mentions, and Bluesky mentions in one row. For jetpack referrers, list the top 3 sources. For amazon, include the best bestseller rank across all editions and marketplaces, plus review count. For oreilly, include total royalties paid and payment count — this is the actual book sales revenue figure.
 
 ### 6. Tracking Gaps & Recommended Sources
 Look at the primary focus and identify what data is missing that would help measure it better. For each gap:

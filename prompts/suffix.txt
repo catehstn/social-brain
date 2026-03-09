@@ -18,12 +18,12 @@ Data shape notes (for interpreting the JSON):
 - buttondown: subscriber_counts per newsletter; newsletters list with open_rate, click_rate, unsubscribes per issue
 - substack: emails list with subject, date, recipients, opens, open_rate, likes, comments, shares, new_signups, new_subscribers per issue
 - vercel: daily_views, visitors, top_pages, referrers, bounce_rate
-- amazon: by_marketplace dict — each marketplace has a list of book editions with best_sellers_rank (lower = better; treat rank as a sales signal — flag notable rank changes or positions), rating, reviews
+- amazon: by_marketplace dict — each marketplace has a list of book editions with best_sellers_rank (lower = better; rank reflects relative popularity, not unit sales), rating, reviews
+- oreilly: payment_count, total_paid, currencies, payments (list of payment_date/amount/currency/line_items objects) — these are actual royalty payments representing real book sales revenue; use oreilly as the primary book sales signal, not amazon rank
 - upcoming: sources.wordpress (scheduled blog posts with title, date, content), sources.buttondown (scheduled emails), sources.buffer (queued social posts with platform, text, scheduled_at)
 - mentions: sources.hacker_news (stories/comments containing monitored domains, with points and num_comments); sources.mastodon / sources.bluesky (@ mention notifications); sources.google_search_console (top queries and pages by clicks)
 - goatcounter: total_pageviews, total_unique, top_paths (page URLs with view counts), events (custom event names with counts — e.g. quiz result distributions)
 - calendly: total_bookings (active), total_canceled, bookings_by_type (list of event_type/active/canceled objects); if lead_gen_event and lead_gen_bookings are present, treat lead_gen_bookings as the primary conversion metric for the period — reference it explicitly when discussing cross-platform patterns and content suggestions
-- oreilly: payment_count, total_paid, currencies, payments (list of payment_date/amount/currency/line_items objects)
 
 Primary focus (what matters most — use this to frame the analysis):
 {primary_focus}

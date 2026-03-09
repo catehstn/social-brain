@@ -27,10 +27,10 @@ Data shape notes (for interpreting the JSON):
 - buttondown: subscriber_counts per newsletter; newsletters with open_rate, click_rate, unsubscribes
 - substack: emails with subject, date, recipients, opens, open_rate, likes, comments, shares
 - vercel: daily_views, visitors, top_pages, referrers
-- amazon: by_marketplace dict — each marketplace has book editions with best_sellers_rank (lower = better), rating, reviews
+- amazon: by_marketplace dict — each marketplace has book editions with best_sellers_rank (lower = better; rank reflects popularity, not unit sales), rating, reviews
+- oreilly: payment_count, total_paid, currencies, payments (payment_date/amount/currency/line_items) — actual royalty payments = real book sales revenue; use this as the primary book sales signal, not amazon rank
 - goatcounter: total_pageviews, total_unique, top_paths, events
 - calendly: total_bookings, total_canceled, bookings_by_type; lead_gen_bookings is the primary conversion metric if present
-- oreilly: payment_count, total_paid, currencies, payments
 
 Primary focus:
 {primary_focus}
