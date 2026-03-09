@@ -441,6 +441,74 @@ class TestCollectLinkedin:
         result = collect_linkedin(linkedin_drops_dir=tmp_path)
         assert result["summary"]["total_impressions"] == 300
 
+    def test_recent_file_no_stale_warning(self, tmp_path, caplog):
+        import logging
+        self._write_csv(tmp_path / "export.csv", [self._csv_row()])
+        with caplog.at_level(logging.WARNING, logger="collect"):
+            collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert not any("days old" in r.message for r in caplog.records)
+
+    def test_stale_file_logs_warning(self, tmp_path, caplog):
+        import logging
+        import os
+        export = tmp_path / "export.csv"
+        self._write_csv(export, [self._csv_row()])
+        # Set mtime to 30 days ago
+        stale_time = time.time() - (30 * 24 * 60 * 60)
+        os.utime(export, (stale_time, stale_time))
+        with caplog.at_level(logging.WARNING, logger="collect"):
+            collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert any("days old" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Substack (file-based — no HTTP needed)
+# ---------------------------------------------------------------------------
+
+class TestCollectSubstack:
+    def _write_csv(self, path: Path, rows: list[dict]) -> None:
+        with path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def _csv_row(self, title: str = "My Post", date: str = "2026-03-01",
+                 delivered: int = 500, open_rate: float = 0.4) -> dict:
+        return {"title": title, "post_date": date, "delivered": str(delivered),
+                "open_rate": str(open_rate), "likes": "10", "comments": "2", "shares": "1"}
+
+    def test_no_files_returns_none(self, tmp_path):
+        from collect import collect_substack
+        result = collect_substack(substack_drops_dir=tmp_path)
+        assert result is None
+
+    def test_csv_parsed_correctly(self, tmp_path):
+        from collect import collect_substack
+        self._write_csv(tmp_path / "export.csv", [self._csv_row()])
+        result = collect_substack(substack_drops_dir=tmp_path)
+        assert result is not None
+        assert result["platform"] == "substack"
+
+    def test_recent_file_no_stale_warning(self, tmp_path, caplog):
+        import logging
+        from collect import collect_substack
+        self._write_csv(tmp_path / "export.csv", [self._csv_row()])
+        with caplog.at_level(logging.WARNING, logger="collect"):
+            collect_substack(substack_drops_dir=tmp_path)
+        assert not any("days old" in r.message for r in caplog.records)
+
+    def test_stale_file_logs_warning(self, tmp_path, caplog):
+        import logging
+        import os
+        from collect import collect_substack
+        export = tmp_path / "export.csv"
+        self._write_csv(export, [self._csv_row()])
+        stale_time = time.time() - (30 * 24 * 60 * 60)
+        os.utime(export, (stale_time, stale_time))
+        with caplog.at_level(logging.WARNING, logger="collect"):
+            collect_substack(substack_drops_dir=tmp_path)
+        assert any("days old" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # Amazon
