@@ -199,14 +199,28 @@ monitored_domains:
 ## Usage
 
 ```bash
-python run.py                    # collect all platforms + build prompt
-python run.py --months 3         # longer lookback window
-python run.py --collect-only     # collect and store data, skip prompt
-python run.py --analyse-only     # build prompt from last saved data
+python run.py                      # collect all platforms + build prompt
+python run.py --months 3           # longer lookback window
+python run.py --collect-only       # collect and store data, skip prompt
+python run.py --analyse-only       # build prompt from last saved data
 python run.py --platform mastodon  # single platform
+python run.py --update             # collect + build a compact update prompt
+python run.py --analyse-only --update  # update prompt from last saved data
 ```
 
-Paste `reports/prompt-YYYY-WNN.txt` into claude.ai to get the report and dashboard. Use **Claude Opus** — it handles the cross-platform analysis and React artifact generation significantly better than Sonnet.
+### First run
+
+Paste `reports/prompt-YYYY-WNN.txt` into a **new** claude.ai chat to get the full report and dashboard. Use **Claude Opus** — it handles cross-platform analysis and React artifact generation significantly better than Sonnet.
+
+### Subsequent weeks — update in the same chat
+
+Instead of starting a new chat each week, run with `--update`:
+
+```bash
+python run.py --update
+```
+
+This generates `reports/prompt-YYYY-WNN-update.txt` — a compact follow-up prompt that tells Claude to update the existing report and dashboard in-place. Paste it into the **same chat** as the original report. This preserves context, keeps the dashboard evolving, and lets Claude compare week-over-week trends directly.
 
 If you haven't run in more than two weeks, the lookback window is automatically extended to cover the gap — no manual `--months` needed.
 
@@ -261,7 +275,7 @@ social-brain/
 ├── analyse.py            # prompt builder
 ├── store.py              # analytics.xlsx upsert logic
 ├── run.py                # CLI entry point
-├── prompts/              # editable prompt templates (preamble.txt, suffix.txt)
+├── prompts/              # editable prompt templates (preamble.txt, suffix.txt, update.txt)
 ├── viz/Dashboard.jsx     # reference template Claude models the artifact on
 ├── tests/                # pytest test suite — no real credentials needed
 ├── data/                 # raw JSON snapshots + analytics.xlsx (gitignored)

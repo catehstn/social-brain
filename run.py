@@ -8,6 +8,8 @@ Usage:
     python run.py --collect-only           # collect and save raw data only
     python run.py --analyse-only           # build prompt from most recent saved data
     python run.py --platform mastodon      # collect only one platform
+    python run.py --update                 # collect + build a compact update prompt for the same chat
+    python run.py --analyse-only --update  # update prompt from most recent saved data
 """
 
 from __future__ import annotations
@@ -169,6 +171,11 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="Collect N months of history instead of the default 2-week window.",
     )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="Generate a compact follow-up prompt (prompt-YYYY-WNN-update.txt) for use in the same claude.ai chat as the original report.",
+    )
     return parser.parse_args()
 
 
@@ -261,8 +268,11 @@ def main() -> None:
     logger.info("=== Building analysis prompt ===")
     from analyse import save_prompt
 
-    prompt_path = save_prompt(collected, config, period=label, reports_dir=REPORTS_DIR, months=args.months)
-    logger.info("=== Done. Paste %s into claude.ai to get your report ===", prompt_path)
+    prompt_path = save_prompt(collected, config, period=label, reports_dir=REPORTS_DIR, months=args.months, update=args.update)
+    if args.update:
+        logger.info("=== Done. Paste %s into your existing claude.ai chat to update the report ===", prompt_path)
+    else:
+        logger.info("=== Done. Paste %s into claude.ai to get your report ===", prompt_path)
 
 
 if __name__ == "__main__":

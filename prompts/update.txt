@@ -1,0 +1,41 @@
+This is a follow-up update to the analytics report in this conversation. New data has been collected for a subsequent period. Please update the report and dashboard artifact in this chat to reflect the new data — do not start a new report from scratch.
+
+Specifically:
+1. Update the report sections (What Worked, What Didn't, Cross-Platform Patterns, Next Period Suggestions, Metrics Summary, Tracking Gaps) to reflect the new period's data. Note any meaningful changes from the previous period where relevant.
+2. Re-render the dashboard artifact with the new period's numbers. Keep the same structure and tabs — just replace the data constants with new values.
+
+Only analyse the platforms listed under "Data collected from". Do not add sections for platforms not in that list.
+
+If lead_gen_bookings is present in the Calendly data, treat it as the primary conversion metric and note any change from the previous period.
+
+---
+
+## New data
+
+PERIOD_ID: {period_id}
+PERIOD_WINDOW: {period_window}
+DATE_RANGE: {date_range}
+
+Data collected from:
+{platforms_available}
+
+Data shape notes (for interpreting the JSON):
+- mastodon: posts sorted by engagement; each post has content, favourites, boosts, replies, has_attachment, attachment_types; account.followers (current count); new_follows and new_follows_count
+- bluesky: posts sorted by engagement; each post has text, likes, reposts, replies; new_follows and new_follows_count when app_password is configured
+- linkedin: daily_engagement (date, impressions, engagements, new_followers); top_posts_by_engagement and top_posts_by_impressions with post text
+- jetpack: daily_views, top_posts, referrers
+- buttondown: subscriber_counts per newsletter; newsletters with open_rate, click_rate, unsubscribes
+- substack: emails with subject, date, recipients, opens, open_rate, likes, comments, shares
+- vercel: daily_views, visitors, top_pages, referrers
+- amazon: by_marketplace dict — each marketplace has book editions with best_sellers_rank (lower = better; rank reflects popularity, not unit sales), rating, reviews
+- oreilly: payment_count, total_paid, currencies, payments (payment_date/amount/currency/line_items) — actual royalty payments = real book sales revenue; use this as the primary book sales signal, not amazon rank
+- goatcounter: total_pageviews, total_unique, top_paths, events
+- calendly: total_bookings, total_canceled, bookings_by_type; lead_gen_bookings is the primary conversion metric if present
+
+Primary focus:
+{primary_focus}
+
+{upcoming_section}---
+
+DATA (JSON):
+{data_json}
