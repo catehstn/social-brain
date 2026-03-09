@@ -17,6 +17,7 @@ from collect import (
     collect_amazon,
     collect_bluesky,
     collect_buttondown,
+    collect_calendly,
     collect_goatcounter,
     collect_jetpack,
     collect_linkedin,
@@ -1106,6 +1107,10 @@ class TestCollectAll:
         result = collect_all({"goatcounter_site": "what-raccoon"}, platform="goatcounter", since=SINCE)
         assert "goatcounter" not in result
 
+    def test_missing_calendly_token_skips(self):
+        result = collect_all({}, platform="calendly", since=SINCE)
+        assert "calendly" not in result
+
     def test_collector_returning_none_absent_from_results(self, monkeypatch):
         monkeypatch.setattr("collect.collect_mastodon", lambda *a, **kw: None)
         config = {"mastodon_instance": "hachyderm.io", "mastodon_handle": "cate"}
@@ -1122,3 +1127,123 @@ class TestCollectAll:
         }
         collect_all(config, platform="mastodon", since=SINCE)
         assert called == ["mastodon"]
+
+
+# ---------------------------------------------------------------------------
+# collect_calendly
+# ---------------------------------------------------------------------------
+
+USER_URI = "https://api.calendly.com/users/abc123"
+ET_URI_INTRO = "https://api.calendly.com/event_types/intro"
+ET_URI_CONSULT = "https://api.calendly.com/event_types/consult"
+
+
+def _calendly_mock(respx_mock):
+    """Wire up standard Calendly API mock responses."""
+    respx_mock.get("https://api.calendly.com/users/me").mock(
+        return_value=httpx.Response(200, json={"resource": {"uri": USER_URI}})
+    )
+    respx_mock.get("https://api.calendly.com/event_types").mock(
+        return_value=httpx.Response(200, json={
+            "collection": [
+                {"uri": ET_URI_INTRO, "name": "Intro call"},
+                {"uri": ET_URI_CONSULT, "name": "Consultation"},
+            ]
+        })
+    )
+
+
+@pytest.mark.respx(base_url="https://api.calendly.com")
+class TestCollectCalendly:
+    def test_returns_expected_keys(self, respx_mock):
+        _calendly_mock(respx_mock)
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            return_value=httpx.Response(200, json={"collection": []})
+        )
+        result = collect_calendly("tok", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "calendly"
+        assert "total_bookings" in result
+        assert "total_canceled" in result
+        assert "bookings_by_type" in result
+
+    def test_aggregates_active_bookings_by_type(self, respx_mock):
+        _calendly_mock(respx_mock)
+        active = [
+            {"event_type": ET_URI_INTRO},
+            {"event_type": ET_URI_INTRO},
+            {"event_type": ET_URI_CONSULT},
+        ]
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE)
+        assert result["total_bookings"] == 3
+        by_name = {e["event_type"]: e for e in result["bookings_by_type"]}
+        assert by_name["Intro call"]["active"] == 2
+        assert by_name["Consultation"]["active"] == 1
+
+    def test_aggregates_canceled_bookings(self, respx_mock):
+        _calendly_mock(respx_mock)
+        canceled = [{"event_type": ET_URI_INTRO}]
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "canceled":
+                return httpx.Response(200, json={"collection": canceled})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE)
+        assert result["total_canceled"] == 1
+        by_name = {e["event_type"]: e for e in result["bookings_by_type"]}
+        assert by_name["Intro call"]["canceled"] == 1
+
+    def test_unknown_event_type_uri_uses_id_fragment(self, respx_mock):
+        respx_mock.get("https://api.calendly.com/users/me").mock(
+            return_value=httpx.Response(200, json={"resource": {"uri": USER_URI}})
+        )
+        respx_mock.get("https://api.calendly.com/event_types").mock(
+            return_value=httpx.Response(200, json={"collection": []})
+        )
+        unknown_uri = "https://api.calendly.com/event_types/mystery-type"
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": [{"event_type": unknown_uri}]})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE)
+        assert result["total_bookings"] == 1
+        assert result["bookings_by_type"][0]["event_type"] == "mystery-type"
+
+    def test_empty_calendar_returns_zeros(self, respx_mock):
+        _calendly_mock(respx_mock)
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            return_value=httpx.Response(200, json={"collection": []})
+        )
+        result = collect_calendly("tok", since=SINCE)
+        assert result["total_bookings"] == 0
+        assert result["total_canceled"] == 0
+        assert result["bookings_by_type"] == []
+
+    def test_network_error_returns_none(self, respx_mock):
+        respx_mock.get("https://api.calendly.com/users/me").mock(
+            side_effect=httpx.ConnectError("connection failed")
+        )
+        result = collect_calendly("tok", since=SINCE)
+        assert result is None
+
+    def test_auth_error_returns_none(self, respx_mock):
+        respx_mock.get("https://api.calendly.com/users/me").mock(
+            return_value=httpx.Response(401, json={"message": "Unauthorized"})
+        )
+        result = collect_calendly("tok", since=SINCE)
+        assert result is None
