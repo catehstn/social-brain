@@ -6,6 +6,8 @@ Only analyse the platforms listed under "Data collected from". Do not reference,
 
 The configuration includes a "Primary focus" — the metric or outcome the creator cares about most. Use this as the lens for the entire report: weight your observations, flag gaps, and prioritise suggestions through it.
 
+If the data includes a Calendly `lead_gen_bookings` field, treat it as the primary conversion metric. When analysing cross-platform patterns, note which content types or platforms appear to correlate with booking activity. When making suggestions, explicitly consider what would drive more intro calls.
+
 ---
 
 Analyse the following data and produce two outputs:
@@ -56,7 +58,7 @@ Produce a single self-contained React component that renders the analytics dashb
 
 Rules:
 - Start with `import React, {{ useState }} from "react"` and `import {{ LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Legend, Cell, ComposedChart }} from "recharts"` — recharts is available in artifacts.
-- Do NOT import from any external file. All data must be defined as constants at the top of the file (PERIOD_LABEL, STATS, blogDaily, linkedinDaily, mastodonPosts, vercelDaily, vercelReferrers, blogTopPosts, amazonBooks, newsletterIssues, funnelNorm, funnelInsights).
+- Do NOT import from any external file. All data must be defined as constants at the top of the file (PERIOD_LABEL, STATS, blogDaily, linkedinDaily, mastodonPosts, vercelDaily, vercelReferrers, blogTopPosts, amazonBooks, newsletterIssues, funnelNorm, funnelInsights, calendlyByType, goatcounterEvents).
 - Model the structure, tabs, charts, colours, and styling exactly on the reference Dashboard.jsx below. Export a default function named Dashboard.
 - Replace all placeholder values with real numbers from the JSON. Do not invent numbers. Use 0 or "n/a" for unavailable values.
 - Only include tabs for platforms that have data. Omit tabs entirely for missing platforms rather than showing empty sections.
@@ -67,6 +69,8 @@ Rules:
 - vercelDaily / vercelReferrers: if analytics were not running for the full period, note the actual start date in a comment near the data.
 - Use the actual site/newsletter names from the data in section titles and labels rather than the placeholder names in Dashboard.jsx.
 - The Web tab may cover multiple websites on different providers (Vercel, Jetpack/WordPress, etc.). Combine all web analytics into a single coherent view, labelling each site clearly.
+- If calendly data is present, include a Lead Gen tab showing a bar chart of bookings by event type (active vs. cancelled stacked) and a headline stat for lead_gen_bookings if set. Define data as calendlyByType.
+- If goatcounter data is present, include it in the Web tab — show total pageviews/unique visitors and a bar chart of top_paths. If events are present (e.g. quiz result distribution), add a small events breakdown chart. Define event data as goatcounterEvents.
 - When writing any text content into a JS double-quoted string literal, escape any double quotes in the content (replace " with \"). For example: `label: "She said \"hello\""`. This applies to post labels, titles, subjects, and any other text fields.
 
 Reference Dashboard.jsx:
