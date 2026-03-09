@@ -830,6 +830,14 @@ def collect_linkedin(linkedin_drops_dir: str | Path = "linkedin_drops") -> dict[
         return None
 
     export_path = export_files[0]
+    file_age = _utcnow() - datetime.fromtimestamp(export_path.stat().st_mtime, tz=timezone.utc)
+    if file_age > timedelta(weeks=2):
+        logger.warning(
+            "LinkedIn: export file %s is %d days old — data may be missing recent activity. "
+            "Consider downloading a fresh export.",
+            export_path.name,
+            file_age.days,
+        )
     logger.info("LinkedIn: reading %s", export_path)
 
     try:
@@ -881,6 +889,14 @@ def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[
         return None
 
     csv_path = csv_files[0]
+    file_age = _utcnow() - datetime.fromtimestamp(csv_path.stat().st_mtime, tz=timezone.utc)
+    if file_age > timedelta(weeks=2):
+        logger.warning(
+            "Substack: export file %s is %d days old — data may be missing recent activity. "
+            "Consider downloading a fresh export.",
+            csv_path.name,
+            file_age.days,
+        )
     logger.info("Substack: reading %s", csv_path)
 
     try:
