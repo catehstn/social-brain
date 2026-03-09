@@ -207,22 +207,7 @@ Every run updates `data/analytics.xlsx` — a multi-sheet spreadsheet that accum
 
 ```mermaid
 flowchart TD
-    subgraph sources["Data sources"]
-        direction TB
-        S1[Mastodon]
-        S2[Bluesky]
-        S3[Buttondown]
-        S4[Jetpack / WordPress]
-        S5[LinkedIn CSV drop]
-        S6[Amazon]
-        S7[Vercel]
-        S8[Hacker News]
-        S9[Google Search Console]
-        S10[Buffer]
-        S11[Substack CSV drop]
-        S12[GoatCounter]
-    end
-
+    SRC[/"platforms & APIs"/]
     CFG[config.yaml]
     CLI[run.py]
     COL[collect.py]
@@ -235,7 +220,7 @@ flowchart TD
 
     CFG --> CLI
     CLI --> COL
-    sources --> COL
+    SRC --> COL
     COL --> JSON
     JSON --> STO
     STO --> XLS
