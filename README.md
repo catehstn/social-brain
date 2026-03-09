@@ -161,7 +161,7 @@ Your site must have Jetpack active with Stats enabled.
    ```
 3. Set `jetpack_access_token` and `jetpack_site` (e.g. `yourdomain.com`) in `config.yaml`
 
-Collects: daily page views, top posts, referrer sources, and scheduled future posts.
+Collects: daily page views, top posts, referrer sources, email subscriber count, WordPress.com follower count, and scheduled future posts.
 
 **Google Search Console**
 
@@ -243,7 +243,7 @@ flowchart TD
     SRC[/"platforms & APIs"/]
     CFG[config.yaml]
     CLI[run.py]
-    COL[collect.py]
+    COL[collectors/]
     STO[store.py]
     ANA[analyse.py]
     XLS[(data/analytics.xlsx)]
@@ -271,7 +271,8 @@ flowchart TD
 social-brain/
 ├── config.example.yaml   # template — copy to config.yaml and fill in your keys
 ├── config.yaml           # your real config — gitignored
-├── collect.py            # data collectors
+├── collect.py            # backward-compat shim (re-exports collectors/)
+├── collectors/           # one file per platform (jetpack.py, mastodon.py, …)
 ├── analyse.py            # prompt builder
 ├── store.py              # analytics.xlsx upsert logic
 ├── run.py                # CLI entry point
