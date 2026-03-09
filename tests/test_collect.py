@@ -446,7 +446,7 @@ class TestCollectLinkedin:
     def test_recent_file_no_stale_warning(self, tmp_path, caplog):
         import logging
         self._write_csv(tmp_path / "export.csv", [self._csv_row()])
-        with caplog.at_level(logging.WARNING, logger="collect"):
+        with caplog.at_level(logging.WARNING, logger="collectors.linkedin"):
             collect_linkedin(linkedin_drops_dir=tmp_path)
         assert not any("days old" in r.message for r in caplog.records)
 
@@ -458,7 +458,7 @@ class TestCollectLinkedin:
         # Set mtime to 30 days ago
         stale_time = time.time() - (30 * 24 * 60 * 60)
         os.utime(export, (stale_time, stale_time))
-        with caplog.at_level(logging.WARNING, logger="collect"):
+        with caplog.at_level(logging.WARNING, logger="collectors.linkedin"):
             collect_linkedin(linkedin_drops_dir=tmp_path)
         assert any("days old" in r.message for r in caplog.records)
 
@@ -495,7 +495,7 @@ class TestCollectSubstack:
         import logging
         from collect import collect_substack
         self._write_csv(tmp_path / "export.csv", [self._csv_row()])
-        with caplog.at_level(logging.WARNING, logger="collect"):
+        with caplog.at_level(logging.WARNING, logger="collectors.substack"):
             collect_substack(substack_drops_dir=tmp_path)
         assert not any("days old" in r.message for r in caplog.records)
 
@@ -507,7 +507,7 @@ class TestCollectSubstack:
         self._write_csv(export, [self._csv_row()])
         stale_time = time.time() - (30 * 24 * 60 * 60)
         os.utime(export, (stale_time, stale_time))
-        with caplog.at_level(logging.WARNING, logger="collect"):
+        with caplog.at_level(logging.WARNING, logger="collectors.substack"):
             collect_substack(substack_drops_dir=tmp_path)
         assert any("days old" in r.message for r in caplog.records)
 
@@ -686,7 +686,7 @@ class TestCollectAmazon:
         assert result is None
 
     def test_404_for_one_asin_skipped(self, respx_mock, monkeypatch):
-        monkeypatch.setattr("collect.time.sleep", lambda _: None)
+        monkeypatch.setattr("collectors.amazon.time.sleep", lambda _: None)
         respx_mock.get("https://www.amazon.com/dp/BADASIN").mock(
             return_value=httpx.Response(404)
         )
@@ -1019,7 +1019,7 @@ class TestCollectMentions:
         import logging
         with patch("google.oauth2.service_account.Credentials") as mock_creds, \
              patch("googleapiclient.discovery.build", return_value=mock_service), \
-             caplog.at_level(logging.WARNING, logger="collect"):
+             caplog.at_level(logging.WARNING, logger="collectors.mentions"):
             mock_creds.from_service_account_file.return_value = MagicMock()
             result = collect_mentions(
                 domains=["cate.blog"], since=SINCE,
@@ -1112,15 +1112,15 @@ class TestCollectAll:
         assert "calendly" not in result
 
     def test_collector_returning_none_absent_from_results(self, monkeypatch):
-        monkeypatch.setattr("collect.collect_mastodon", lambda *a, **kw: None)
+        monkeypatch.setattr("collectors._dispatch.collect_mastodon", lambda *a, **kw: None)
         config = {"mastodon_instance": "hachyderm.io", "mastodon_handle": "cate"}
         result = collect_all(config, platform="mastodon", since=SINCE)
         assert "mastodon" not in result
 
     def test_platform_filter_runs_only_one_collector(self, monkeypatch):
         called = []
-        monkeypatch.setattr("collect.collect_mastodon", lambda *a, **kw: called.append("mastodon") or {})
-        monkeypatch.setattr("collect.collect_bluesky", lambda *a, **kw: called.append("bluesky") or {})
+        monkeypatch.setattr("collectors._dispatch.collect_mastodon", lambda *a, **kw: called.append("mastodon") or {})
+        monkeypatch.setattr("collectors._dispatch.collect_bluesky", lambda *a, **kw: called.append("bluesky") or {})
         config = {
             "mastodon_instance": "hachyderm.io", "mastodon_handle": "cate",
             "bluesky_handle": "x.bsky.social",

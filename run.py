@@ -7,7 +7,7 @@ Usage:
     python run.py --months 3               # collect 3 months of history
     python run.py --collect-only           # collect and save raw data only
     python run.py --analyse-only           # build prompt from most recent saved data
-    python run.py --platform mastodon      # collect only one platform
+    python run.py --platform <name>        # collect only one platform
     python run.py --update                 # collect + build a compact update prompt for the same chat
     python run.py --analyse-only --update  # update prompt from most recent saved data
 """
@@ -158,9 +158,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip collection and analyse the most recent saved raw data.",
     )
+    from collectors import PLATFORM_COLLECTORS
     parser.add_argument(
         "--platform",
-        choices=["mastodon", "bluesky", "buttondown", "jetpack", "linkedin", "substack", "vercel", "amazon", "upcoming", "mentions", "goatcounter", "oreilly", "calendly"],
+        choices=sorted(PLATFORM_COLLECTORS.keys()),
         default=None,
         help="Collect only one platform (cannot be combined with --analyse-only).",
     )
