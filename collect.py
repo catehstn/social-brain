@@ -1823,10 +1823,13 @@ def collect_goatcounter(
 def collect_calendly(
     token: str,
     since: datetime | None = None,
+    lead_gen_event: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Collect booking data from Calendly as a lead-gen metric.
     Returns bookings grouped by event type with active/cancelled counts.
+    If lead_gen_event is set, the active count for that event type is
+    surfaced separately as lead_gen_bookings.
     Requires a Personal Access Token from calendly.com/integrations/api_webhooks.
     """
     if since is None:
@@ -1889,7 +1892,7 @@ def collect_calendly(
         total_active = sum(e["active"] for e in bookings_by_type)
         total_canceled = sum(e["canceled"] for e in bookings_by_type)
 
-        return {
+        result: dict[str, Any] = {
             "platform": "calendly",
             "collected_at": _iso(_utcnow()),
             "period_start": _iso(since),
@@ -1898,6 +1901,13 @@ def collect_calendly(
             "total_canceled": total_canceled,
             "bookings_by_type": bookings_by_type,
         }
+
+        if lead_gen_event:
+            result["lead_gen_event"] = lead_gen_event
+            match = next((e for e in bookings_by_type if e["event_type"] == lead_gen_event), None)
+            result["lead_gen_bookings"] = match["active"] if match else 0
+
+        return result
     except Exception as exc:
         logger.error("Calendly collection failed: %s", exc)
         return None
@@ -2035,7 +2045,7 @@ def collect_all(
             if not calendly_token:
                 logger.info("Calendly: calendly_token not configured — skipping")
                 return
-            data = collect_calendly(calendly_token, since=since)
+            data = collect_calendly(calendly_token, since=since, lead_gen_event=config.get("calendly_lead_gen_event") or None)
         else:
             logger.error("Unknown platform: %s", name)
             return

@@ -1247,3 +1247,39 @@ class TestCollectCalendly:
         )
         result = collect_calendly("tok", since=SINCE)
         assert result is None
+
+    def test_lead_gen_event_surfaced_separately(self, respx_mock):
+        _calendly_mock(respx_mock)
+        active = [
+            {"event_type": ET_URI_INTRO},
+            {"event_type": ET_URI_INTRO},
+            {"event_type": ET_URI_CONSULT},
+        ]
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE, lead_gen_event="Intro call")
+        assert result["lead_gen_event"] == "Intro call"
+        assert result["lead_gen_bookings"] == 2
+
+    def test_lead_gen_event_missing_returns_zero(self, respx_mock):
+        _calendly_mock(respx_mock)
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            return_value=httpx.Response(200, json={"collection": []})
+        )
+        result = collect_calendly("tok", since=SINCE, lead_gen_event="Nonexistent Event")
+        assert result["lead_gen_bookings"] == 0
+
+    def test_no_lead_gen_event_omits_field(self, respx_mock):
+        _calendly_mock(respx_mock)
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            return_value=httpx.Response(200, json={"collection": []})
+        )
+        result = collect_calendly("tok", since=SINCE)
+        assert "lead_gen_bookings" not in result
+        assert "lead_gen_event" not in result

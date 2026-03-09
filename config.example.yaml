@@ -65,6 +65,7 @@ vercel_team_id:                        # Team ID if the project is in a team (op
 # --- Calendly (optional — lead-gen metric) ---
 # Personal Access Token from calendly.com/integrations/api_webhooks
 # calendly_token: YOUR_CALENDLY_TOKEN
+# calendly_lead_gen_event: "30 Minute Coaching Intro"  # exact event name to surface as primary lead-gen metric
 
 # --- Content strategy ---
 # primary_focus: the metric or outcome you care about most. Claude uses this to frame
