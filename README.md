@@ -95,6 +95,14 @@ To track custom events (e.g. quiz results), call `window.goatcounter.count()` wi
 
 Collects: total pageviews, unique visitors, and per-path breakdown (including custom events).
 
+**Calendly** (lead-gen metric)
+1. [calendly.com/integrations/api_webhooks](https://calendly.com/integrations/api_webhooks) → Personal Access Tokens → Create new token
+2. Enable these three scopes: `users:read`, `event_types:read`, `scheduled_events:read`
+3. Set `calendly_token` in `config.yaml`
+4. Optionally set `calendly_lead_gen_event` to the exact name of your intro/discovery call — this surfaces a `lead_gen_bookings` count as a top-level metric so Claude can treat it as your primary conversion signal
+
+Collects: booking counts grouped by event type with active vs. cancelled split, plus `lead_gen_bookings` if configured.
+
 **Vercel Web Analytics**
 
 Your project must have Web Analytics enabled. You need at least Member access on the team.
