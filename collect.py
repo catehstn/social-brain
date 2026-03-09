@@ -1573,6 +1573,57 @@ def _strip_html_simple(html: str) -> str:
     return re.sub(r"<[^>]+>", " ", html).strip()
 
 
+# ---------------------------------------------------------------------------
+# GoatCounter
+# ---------------------------------------------------------------------------
+
+def collect_goatcounter(
+    site: str,
+    token: str,
+    since: datetime | None = None,
+) -> dict[str, Any] | None:
+    """
+    Collect pageview stats from GoatCounter.
+    Returns total pageviews, unique visitors, and raccoon result distribution.
+    """
+    if since is None:
+        since = _default_since()
+
+    base = f"https://{site}.goatcounter.com/api/v0"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    start = since.strftime("%Y-%m-%d")
+    end = _utcnow().strftime("%Y-%m-%d")
+
+    try:
+        with httpx.Client(timeout=30, headers=headers) as client:
+            r = client.get(f"{base}/stats/total", params={"start": start, "end": end})
+            r.raise_for_status()
+            total_data = r.json()
+
+            r = client.get(f"{base}/stats/hits", params={"start": start, "end": end, "limit": 200})
+            r.raise_for_status()
+            hits_data = r.json()
+
+        raccoon_hits = {
+            hit["path"].removeprefix("result/"): hit["count"]
+            for hit in hits_data.get("hits", [])
+            if hit["path"].startswith("result/")
+        }
+
+        return {
+            "platform": "goatcounter",
+            "collected_at": _iso(_utcnow()),
+            "period_start": start,
+            "period_end": end,
+            "total_pageviews": total_data.get("total", 0),
+            "total_unique": total_data.get("total_unique", 0),
+            "raccoon_hits": raccoon_hits,
+        }
+    except Exception as exc:
+        logger.error("GoatCounter collection failed: %s", exc)
+        return None
+
+
 PLATFORM_COLLECTORS = {
     "mastodon": "collect_mastodon",
     "bluesky": "collect_bluesky",
@@ -1584,6 +1635,7 @@ PLATFORM_COLLECTORS = {
     "amazon": "collect_amazon",
     "upcoming": "collect_upcoming",
     "mentions": "collect_mentions",
+    "goatcounter": "collect_goatcounter",
 }
 
 
@@ -1688,6 +1740,13 @@ def collect_all(
                 bluesky_app_password=config.get("bluesky_app_password", ""),
                 gsc_credentials_file=config.get("gsc_credentials_file", ""),
             )
+        elif name == "goatcounter":
+            gc_site = config.get("goatcounter_site", "")
+            gc_token = config.get("goatcounter_token", "")
+            if not gc_site or not gc_token:
+                logger.info("GoatCounter: goatcounter_site or goatcounter_token not configured — skipping")
+                return
+            data = collect_goatcounter(gc_site, gc_token, since=since)
         else:
             logger.error("Unknown platform: %s", name)
             return
