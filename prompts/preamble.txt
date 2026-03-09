@@ -37,6 +37,8 @@ Exactly 5 specific content ideas. For each:
 - Recommended platform(s) — only suggest platforms in the data
 - The signal that justifies it
 
+Ideas 1–4 should be grounded directly in the data. Idea 5 should be a wilder, more experimental concept — something outside the creator's current patterns that the data hints at but doesn't directly support. It should still be plausible and specific, not generic advice.
+
 If upcoming scheduled content is listed in the data, treat those as already planned and suggest complementary ideas rather than duplicating them.
 
 ### 5. Metrics Summary
