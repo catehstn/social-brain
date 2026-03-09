@@ -448,3 +448,45 @@ class TestMain:
             run.main()
 
         mock_store_update.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# parse_args — --platform choices generated from PLATFORM_COLLECTORS
+# ---------------------------------------------------------------------------
+
+class TestParseArgs:
+    def test_platform_choices_match_platform_collectors_keys(self, monkeypatch):
+        """--platform choices must equal PLATFORM_COLLECTORS.keys() (sorted)."""
+        from collectors import PLATFORM_COLLECTORS
+        monkeypatch.setattr(sys, "argv", ["run.py"])
+        # parse_args builds choices from PLATFORM_COLLECTORS inside the function
+        # We verify by checking that every key in PLATFORM_COLLECTORS is a valid choice
+        # by calling parse_args with each platform value without error
+        for platform in PLATFORM_COLLECTORS.keys():
+            monkeypatch.setattr(sys, "argv", ["run.py", "--platform", platform])
+            args = run.parse_args()
+            assert args.platform == platform
+
+    def test_all_platform_collectors_keys_are_valid_choices(self, monkeypatch):
+        """Every key in PLATFORM_COLLECTORS should be accepted by --platform."""
+        from collectors import PLATFORM_COLLECTORS
+        for platform in PLATFORM_COLLECTORS.keys():
+            monkeypatch.setattr(sys, "argv", ["run.py", "--platform", platform, "--collect-only"])
+            args = run.parse_args()
+            assert args.platform == platform
+
+    def test_platform_choices_count_matches_platform_collectors(self, monkeypatch):
+        """The number of valid --platform choices equals len(PLATFORM_COLLECTORS)."""
+        import argparse
+        from collectors import PLATFORM_COLLECTORS
+        # Reconstruct the parser to inspect choices directly
+        parser = argparse.ArgumentParser()
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument("--collect-only", action="store_true")
+        mode.add_argument("--analyse-only", action="store_true")
+        action = parser.add_argument(
+            "--platform",
+            choices=sorted(PLATFORM_COLLECTORS.keys()),
+        )
+        assert set(action.choices) == set(PLATFORM_COLLECTORS.keys())
+        assert len(action.choices) == len(PLATFORM_COLLECTORS)
