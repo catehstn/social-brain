@@ -17,6 +17,7 @@ from collect import (
     collect_amazon,
     collect_bluesky,
     collect_buttondown,
+    collect_goatcounter,
     collect_jetpack,
     collect_linkedin,
     collect_mastodon,
@@ -619,6 +620,72 @@ class TestCollectVercel:
 
 
 # ---------------------------------------------------------------------------
+# GoatCounter
+# ---------------------------------------------------------------------------
+
+class TestCollectGoatcounter:
+    BASE = "https://what-raccoon.goatcounter.com/api/v0"
+
+    def _mock_all(self, respx_mock, hits=None, total=None):
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(200, json=total or {"total": 1500, "total_unique": 900})
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(200, json={"hits": hits or [
+                {"path": "/", "count": 1300},
+                {"path": "/about", "count": 200},
+                {"path": "result/trike", "count": 120},
+                {"path": "result/mpr", "count": 80},
+            ]})
+        )
+
+    def test_happy_path_returns_data(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "goatcounter"
+        assert result["total_pageviews"] == 1500
+        assert result["total_unique"] == 900
+
+    def test_page_paths_in_top_paths(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        paths = [h["path"] for h in result["top_paths"]]
+        assert "/" in paths
+        assert "/about" in paths
+
+    def test_events_separated_from_paths(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        events = [e["event"] for e in result["events"]]
+        assert "result/trike" in events
+        assert "result/mpr" in events
+
+    def test_events_not_in_top_paths(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        paths = [h["path"] for h in result["top_paths"]]
+        assert not any(p.startswith("result/") for p in paths)
+
+    def test_no_events_returns_empty_list(self, respx_mock):
+        self._mock_all(respx_mock, hits=[{"path": "/", "count": 500}])
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        assert result["events"] == []
+
+    def test_api_error_returns_none(self, respx_mock):
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(401, json={"error": "unauthorized"})
+        )
+        result = collect_goatcounter("what-raccoon", "badtoken", since=SINCE)
+        assert result is None
+
+    def test_period_dates_in_result(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        assert result["period_start"] == SINCE.strftime("%Y-%m-%d")
+
+
+# ---------------------------------------------------------------------------
 # collect_mentions
 # ---------------------------------------------------------------------------
 
@@ -888,6 +955,14 @@ class TestCollectAll:
     def test_missing_monitored_domains_skips_mentions(self):
         result = collect_all({}, platform="mentions", since=SINCE)
         assert "mentions" not in result
+
+    def test_missing_goatcounter_site_skips(self):
+        result = collect_all({"goatcounter_token": "tok"}, platform="goatcounter", since=SINCE)
+        assert "goatcounter" not in result
+
+    def test_missing_goatcounter_token_skips(self):
+        result = collect_all({"goatcounter_site": "what-raccoon"}, platform="goatcounter", since=SINCE)
+        assert "goatcounter" not in result
 
     def test_collector_returning_none_absent_from_results(self, monkeypatch):
         monkeypatch.setattr("collect.collect_mastodon", lambda *a, **kw: None)

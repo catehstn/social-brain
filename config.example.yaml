@@ -58,6 +58,10 @@ vercel_token: YOUR_VERCEL_TOKEN        # Vercel account token (Settings → Toke
 vercel_project_id: your-project-slug  # Project name/slug (shown in the URL, e.g. "my-app")
 vercel_team_id:                        # Team ID if the project is in a team (optional)
 
+# --- GoatCounter (optional) ---
+# goatcounter_site: what-raccoon   # the subdomain part of yoursite.goatcounter.com
+# goatcounter_token: YOUR_GOATCOUNTER_TOKEN  # Settings → API → Create token
+
 # --- Content strategy ---
 # primary_focus: the metric or outcome you care about most. Claude uses this to frame
 # the analysis and recommend data sources that would help measure it better.

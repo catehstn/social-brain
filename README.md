@@ -81,6 +81,20 @@ Collects: subscriber counts, and per-issue open rate, click rate, unsubscribes. 
 
 Collects: all queued posts across connected channels — shown to Claude as upcoming content so it suggests complementary ideas.
 
+**GoatCounter**
+1. [goatcounter.com](https://www.goatcounter.com) → create an account and site
+2. Add the tracking script to your site's `<head>`:
+   ```html
+   <script data-goatcounter="https://yoursite.goatcounter.com/count"
+       async src="//gc.zgo.at/count.js"></script>
+   ```
+3. Settings → API → Create token (read access)
+4. Set `goatcounter_site` (just the subdomain, e.g. `what-raccoon`) and `goatcounter_token` in `config.yaml`
+
+To track custom events (e.g. quiz results), call `window.goatcounter.count()` with `event: true` in your JS.
+
+Collects: total pageviews, unique visitors, and per-path breakdown (including custom events).
+
 **Vercel Web Analytics**
 
 Your project must have Web Analytics enabled. You need at least Member access on the team.
@@ -206,6 +220,7 @@ flowchart TD
         S9[Google Search Console]
         S10[Buffer]
         S11[Substack CSV drop]
+        S12[GoatCounter]
     end
 
     CFG[config.yaml]
@@ -244,7 +259,7 @@ social-brain/
 ├── run.py                # CLI entry point
 ├── prompts/              # editable prompt templates (preamble.txt, suffix.txt)
 ├── viz/Dashboard.jsx     # reference template Claude models the artifact on
-├── tests/                # pytest test suite (228 tests, no real credentials needed)
+├── tests/                # pytest test suite — no real credentials needed
 ├── data/                 # raw JSON snapshots + analytics.xlsx (gitignored)
 ├── reports/              # generated prompt files (gitignored)
 ├── linkedin_drops/       # drop LinkedIn exports here
