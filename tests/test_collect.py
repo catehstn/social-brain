@@ -564,9 +564,10 @@ class TestCollectGoatcounter:
         )
         respx_mock.get(f"{self.BASE}/stats/hits").mock(
             return_value=httpx.Response(200, json={"hits": hits or [
+                {"path": "/", "count": 1300},
+                {"path": "/about", "count": 200},
                 {"path": "result/trike", "count": 120},
                 {"path": "result/mpr", "count": 80},
-                {"path": "/", "count": 1300},
             ]})
         )
 
@@ -578,20 +579,30 @@ class TestCollectGoatcounter:
         assert result["total_pageviews"] == 1500
         assert result["total_unique"] == 900
 
-    def test_raccoon_hits_extracted(self, respx_mock):
+    def test_page_paths_in_top_paths(self, respx_mock):
         self._mock_all(respx_mock)
         result = collect_goatcounter("what-raccoon", "token", since=SINCE)
-        assert result["raccoon_hits"] == {"trike": 120, "mpr": 80}
+        paths = [h["path"] for h in result["top_paths"]]
+        assert "/" in paths
+        assert "/about" in paths
 
-    def test_non_raccoon_paths_excluded(self, respx_mock):
+    def test_events_separated_from_paths(self, respx_mock):
         self._mock_all(respx_mock)
         result = collect_goatcounter("what-raccoon", "token", since=SINCE)
-        assert "/" not in result["raccoon_hits"]
+        events = [e["event"] for e in result["events"]]
+        assert "result/trike" in events
+        assert "result/mpr" in events
 
-    def test_no_raccoon_hits_returns_empty_dict(self, respx_mock):
+    def test_events_not_in_top_paths(self, respx_mock):
+        self._mock_all(respx_mock)
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        paths = [h["path"] for h in result["top_paths"]]
+        assert not any(p.startswith("result/") for p in paths)
+
+    def test_no_events_returns_empty_list(self, respx_mock):
         self._mock_all(respx_mock, hits=[{"path": "/", "count": 500}])
         result = collect_goatcounter("what-raccoon", "token", since=SINCE)
-        assert result["raccoon_hits"] == {}
+        assert result["events"] == []
 
     def test_api_error_returns_none(self, respx_mock):
         respx_mock.get(f"{self.BASE}/stats/total").mock(

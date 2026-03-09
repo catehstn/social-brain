@@ -1604,11 +1604,15 @@ def collect_goatcounter(
             r.raise_for_status()
             hits_data = r.json()
 
-        raccoon_hits = {
-            hit["path"].removeprefix("result/"): hit["count"]
-            for hit in hits_data.get("hits", [])
-            if hit["path"].startswith("result/")
-        }
+        hits = hits_data.get("hits", [])
+        top_paths = [
+            {"path": h["path"], "count": h["count"]}
+            for h in hits if h["path"].startswith("/")
+        ]
+        events = [
+            {"event": h["path"], "count": h["count"]}
+            for h in hits if not h["path"].startswith("/")
+        ]
 
         return {
             "platform": "goatcounter",
@@ -1617,7 +1621,8 @@ def collect_goatcounter(
             "period_end": end,
             "total_pageviews": total_data.get("total", 0),
             "total_unique": total_data.get("total_unique", 0),
-            "raccoon_hits": raccoon_hits,
+            "top_paths": top_paths,
+            "events": events,
         }
     except Exception as exc:
         logger.error("GoatCounter collection failed: %s", exc)
