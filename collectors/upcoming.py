@@ -55,27 +55,41 @@ def collect_upcoming(
         except Exception as exc:
             logger.error("Upcoming/WordPress failed: %s", exc)
 
-    # --- Buttondown scheduled emails ---
+    # --- Buttondown scheduled emails (all newsletters) ---
     if buttondown_api_key:
         try:
             r = httpx.get(
-                "https://api.buttondown.email/v1/emails",
-                params={"status": "scheduled"},
+                "https://api.buttondown.email/v1/newsletters",
                 headers={"Authorization": f"Token {buttondown_api_key}"},
                 timeout=30,
             )
             r.raise_for_status()
-            raw_emails = r.json().get("results", [])
-            emails = [
-                {
-                    "subject": e.get("subject", ""),
-                    "scheduled_date": e.get("publish_date") or e.get("creation_date", ""),
-                    "content": _strip_html(e.get("body", "")),
-                }
-                for e in raw_emails
-            ]
-            sources["buttondown"] = emails
-            logger.info("Upcoming: %d scheduled Buttondown emails", len(emails))
+            newsletters = r.json().get("results", [])
+
+            all_scheduled: list[dict] = []
+            for nl in newsletters:
+                nl_name = nl.get("name", nl.get("domain", nl["id"]))
+                nl_key = nl.get("api_key", buttondown_api_key)
+                try:
+                    r = httpx.get(
+                        "https://api.buttondown.email/v1/emails",
+                        params={"status": "scheduled"},
+                        headers={"Authorization": f"Token {nl_key}"},
+                        timeout=30,
+                    )
+                    r.raise_for_status()
+                    for e in r.json().get("results", []):
+                        all_scheduled.append({
+                            "newsletter": nl_name,
+                            "subject": e.get("subject", ""),
+                            "scheduled_date": e.get("publish_date") or e.get("creation_date", ""),
+                            "content": _strip_html(e.get("body", "")),
+                        })
+                except Exception as exc:
+                    logger.warning("Upcoming/Buttondown [%s] failed: %s", nl_name, exc)
+
+            sources["buttondown"] = all_scheduled
+            logger.info("Upcoming: %d scheduled Buttondown emails across %d newsletters", len(all_scheduled), len(newsletters))
         except Exception as exc:
             logger.error("Upcoming/Buttondown failed: %s", exc)
 
