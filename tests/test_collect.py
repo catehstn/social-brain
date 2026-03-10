@@ -23,6 +23,7 @@ from collect import (
     collect_linkedin,
     collect_mastodon,
     collect_mentions,
+    collect_upcoming,
     collect_vercel,
     collect_all,
 )
@@ -1295,3 +1296,122 @@ class TestCollectCalendly:
         result = collect_calendly("tok", since=SINCE)
         assert "lead_gen_bookings" not in result
         assert "lead_gen_event" not in result
+
+
+# ---------------------------------------------------------------------------
+# Upcoming
+# ---------------------------------------------------------------------------
+
+def _buttondown_newsletters_mock(respx_mock, newsletters):
+    respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+        return_value=httpx.Response(200, json={"results": newsletters})
+    )
+
+
+def _buttondown_scheduled_mock(respx_mock, emails, api_key=None):
+    """Mock scheduled emails endpoint. If api_key given, match on Authorization header."""
+    def handler(request):
+        if api_key and request.headers.get("authorization") != f"Token {api_key}":
+            return httpx.Response(401)
+        return httpx.Response(200, json={"results": emails})
+    respx_mock.get("https://api.buttondown.email/v1/emails").mock(side_effect=handler)
+
+
+class TestCollectUpcoming:
+    def _newsletter(self, name="My Newsletter", api_key="nl-key-1"):
+        return {"id": "nl-1", "name": name, "api_key": api_key}
+
+    def _scheduled_email(self, subject="Upcoming Issue", date="2026-03-15T10:00:00Z"):
+        return {"subject": subject, "publish_date": date, "body": "<p>Hello</p>"}
+
+    def test_returns_none_when_no_sources_configured(self, respx_mock):
+        result = collect_upcoming()
+        assert result is None
+
+    def test_collects_scheduled_emails_from_all_newsletters(self, respx_mock):
+        newsletters = [
+            {"id": "nl-1", "name": "Newsletter A", "api_key": "key-a"},
+            {"id": "nl-2", "name": "Newsletter B", "api_key": "key-b"},
+        ]
+        _buttondown_newsletters_mock(respx_mock, newsletters)
+
+        def scheduled_handler(request):
+            auth = request.headers.get("authorization", "")
+            if auth == "Token key-a":
+                return httpx.Response(200, json={"results": [self._scheduled_email("Issue A")]})
+            elif auth == "Token key-b":
+                return httpx.Response(200, json={"results": [self._scheduled_email("Issue B")]})
+            return httpx.Response(401)
+
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(side_effect=scheduled_handler)
+
+        result = collect_upcoming(buttondown_api_key="master-key")
+        assert result is not None
+        emails = result["sources"]["buttondown"]
+        assert len(emails) == 2
+        subjects = {e["subject"] for e in emails}
+        assert subjects == {"Issue A", "Issue B"}
+
+    def test_includes_newsletter_name_in_each_email(self, respx_mock):
+        _buttondown_newsletters_mock(respx_mock, [self._newsletter("DRI Your Career", "dri-key")])
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [self._scheduled_email()]})
+        )
+        result = collect_upcoming(buttondown_api_key="master-key")
+        email = result["sources"]["buttondown"][0]
+        assert email["newsletter"] == "DRI Your Career"
+
+    def test_strips_html_from_content(self, respx_mock):
+        _buttondown_newsletters_mock(respx_mock, [self._newsletter()])
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [self._scheduled_email()]})
+        )
+        result = collect_upcoming(buttondown_api_key="master-key")
+        email = result["sources"]["buttondown"][0]
+        assert "<p>" not in email["content"]
+        assert "Hello" in email["content"]
+
+    def test_no_scheduled_emails_returns_empty_list(self, respx_mock):
+        _buttondown_newsletters_mock(respx_mock, [self._newsletter()])
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        result = collect_upcoming(buttondown_api_key="master-key")
+        assert result["sources"]["buttondown"] == []
+
+    def test_no_newsletters_returns_empty_list(self, respx_mock):
+        _buttondown_newsletters_mock(respx_mock, [])
+        result = collect_upcoming(buttondown_api_key="master-key")
+        assert result["sources"]["buttondown"] == []
+
+    def test_one_newsletter_failure_doesnt_stop_others(self, respx_mock):
+        newsletters = [
+            {"id": "nl-1", "name": "Good Newsletter", "api_key": "good-key"},
+            {"id": "nl-2", "name": "Bad Newsletter", "api_key": "bad-key"},
+        ]
+        _buttondown_newsletters_mock(respx_mock, newsletters)
+
+        def handler(request):
+            auth = request.headers.get("authorization", "")
+            if auth == "Token good-key":
+                return httpx.Response(200, json={"results": [self._scheduled_email("Good Issue")]})
+            return httpx.Response(500)
+
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(side_effect=handler)
+
+        result = collect_upcoming(buttondown_api_key="master-key")
+        assert result is not None
+        emails = result["sources"]["buttondown"]
+        assert len(emails) == 1
+        assert emails[0]["subject"] == "Good Issue"
+
+    def test_newsletters_api_failure_logs_error(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(401)
+        )
+        result = collect_upcoming(buttondown_api_key="bad-key")
+        assert result is None
+
+    def test_skips_buttondown_when_no_key(self, respx_mock):
+        result = collect_upcoming(buttondown_api_key="")
+        assert result is None
