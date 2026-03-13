@@ -202,7 +202,8 @@ monitored_domains:
 python run.py                      # collect all platforms + build prompt
 python run.py --months 3           # longer lookback window
 python run.py --collect-only       # collect and store data, skip prompt
-python run.py --analyse-only       # build prompt from last saved data
+python run.py --analyse-only       # build prompt from last saved data (fresh chat)
+python run.py --analyse-only --months 3  # same, with 3-month label in filename
 python run.py --platform mastodon  # single platform
 python run.py --update             # collect + build a compact update prompt
 python run.py --analyse-only --update  # update prompt from last saved data
@@ -211,6 +212,18 @@ python run.py --analyse-only --update  # update prompt from last saved data
 ### First run
 
 Paste `reports/prompt-YYYY-WNN.txt` into a **new** claude.ai chat to get the full report and dashboard. Use **Claude Opus** — it handles cross-platform analysis and React artifact generation significantly better than Sonnet.
+
+### Starting a fresh chat (context window reset)
+
+If the claude.ai chat has grown too long or you want a clean slate, generate a new full prompt from your already-collected data:
+
+```bash
+python run.py --analyse-only
+```
+
+This skips collection and rebuilds the full prompt from the most recent snapshot. Paste it into a **new** claude.ai chat. You don't need to re-collect — the data you already have is reused.
+
+If your last collection used `--months 3`, the snapshot already covers 3 months; no extra flags needed.
 
 ### Subsequent weeks — update in the same chat
 
