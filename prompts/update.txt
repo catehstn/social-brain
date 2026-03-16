@@ -2,7 +2,7 @@ This is a follow-up update to the analytics report in this conversation. New dat
 
 Specifically:
 1. Update the report sections (What Worked, What Didn't, Cross-Platform Patterns, Next Period Suggestions, Metrics Summary, Tracking Gaps) to reflect the new period's data. Note any meaningful changes from the previous period where relevant.
-2. Re-render the dashboard artifact with the new period's numbers. Keep the same structure and tabs — just replace the data constants with new values.
+2. Re-render the dashboard artifact with the new period's numbers. Keep the same structure and tabs — just replace the data constants with new values. The reference template is at https://raw.githubusercontent.com/catehstn/social-brain/main/viz/Dashboard.jsx if you need to check the structure.
 
 Only analyse the platforms listed under "Data collected from". Do not add sections for platforms not in that list.
 

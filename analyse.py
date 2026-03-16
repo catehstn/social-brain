@@ -230,12 +230,11 @@ def build_prompt(
     data_json = json.dumps(trimmed, indent=2, default=str)
     upcoming_section = _format_upcoming_section(collected_data)
 
-    # --- Assemble prompt (Dashboard.jsx inserted as plain string to avoid brace conflicts) ---
+    # --- Assemble prompt ---
     preamble = _read_preamble().format(
         period_window=period_window,
         period_id=period,
     )
-    dashboard_ref = _read_dashboard_reference()
     suffix = _read_suffix().format(
         period_id=period,
         period_window=period_window,
@@ -248,7 +247,7 @@ def build_prompt(
         data_json=data_json,
     )
 
-    return preamble + dashboard_ref + suffix
+    return preamble + suffix
 
 
 def build_update_prompt(
