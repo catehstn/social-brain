@@ -85,7 +85,7 @@ def _trim_data(data: dict[str, Any]) -> dict[str, Any]:
     """
     data = copy.deepcopy(data)
 
-    # Mastodon: strip HTML, truncate, drop non-analytics fields, keep top 30 by engagement
+    # Mastodon: strip HTML, truncate, drop non-analytics fields, keep top 15 by engagement
     mastodon_posts = data.get("mastodon", {}).get("posts", [])
     for post in mastodon_posts:
         post["content"] = _strip_html(post.get("content", ""))[:200]
@@ -96,10 +96,10 @@ def _trim_data(data: dict[str, Any]) -> dict[str, Any]:
         reverse=True,
     )
     if "mastodon" in data:
-        data["mastodon"]["posts"] = mastodon_posts[:30]
-        data["mastodon"]["note"] = f"Showing top 30 of {len(mastodon_posts)} posts by engagement"
+        data["mastodon"]["posts"] = mastodon_posts[:15]
+        data["mastodon"]["note"] = f"Showing top 15 of {len(mastodon_posts)} posts by engagement"
 
-    # Bluesky: truncate text, drop URI, keep top 30 by engagement
+    # Bluesky: truncate text, drop URI, keep top 15 by engagement
     bluesky_posts = data.get("bluesky", {}).get("posts", [])
     for post in bluesky_posts:
         post["text"] = post.get("text", "")[:200]
@@ -109,8 +109,30 @@ def _trim_data(data: dict[str, Any]) -> dict[str, Any]:
         reverse=True,
     )
     if "bluesky" in data:
-        data["bluesky"]["posts"] = bluesky_posts[:30]
-        data["bluesky"]["note"] = f"Showing top 30 of {len(bluesky_posts)} posts by engagement"
+        data["bluesky"]["posts"] = bluesky_posts[:15]
+        data["bluesky"]["note"] = f"Showing top 15 of {len(bluesky_posts)} posts by engagement"
+
+    # LinkedIn: truncate post text, deduplicate the two top-post lists, cap daily data
+    if "linkedin" in data:
+        li = data["linkedin"]
+
+        # Truncate post text and keep top 15 by engagement; drop impressions list (overlaps heavily)
+        eng_posts = li.get("top_posts_by_engagement", [])
+        for post in eng_posts:
+            post["text"] = _strip_html(post.get("text", ""))[:300]
+            post.pop("url", None)
+        li["top_posts_by_engagement"] = eng_posts[:15]
+        li["top_posts_by_impressions_note"] = "Omitted — see top_posts_by_engagement for post content"
+        li.pop("top_posts_by_impressions", None)
+
+        # Cap daily engagement to 30 most recent days
+        daily = li.get("daily_engagement", [])
+        if len(daily) > 30:
+            li["daily_engagement"] = daily[-30:]
+            li["daily_engagement_note"] = f"Showing most recent 30 of {len(daily)} days"
+
+        # Drop demographics — not needed for content analysis
+        li.pop("demographics", None)
 
     # Buttondown: drop full body — not useful for analytics
     for email in data.get("buttondown", {}).get("newsletters", []):
