@@ -78,12 +78,14 @@ def _strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _trim_data(data: dict[str, Any]) -> dict[str, Any]:
+def _trim_data(data: dict[str, Any], months: int | None = None) -> dict[str, Any]:
     """
     Return a copy of collected data with HTML stripped from post content
     and long text fields truncated, to keep the prompt a manageable size.
+    Pass months to allow larger post lists for longer lookback windows.
     """
     data = copy.deepcopy(data)
+    linkedin_post_limit = 25 if months else 15
 
     # Mastodon: strip HTML, truncate, drop non-analytics fields, keep top 15 by engagement
     mastodon_posts = data.get("mastodon", {}).get("posts", [])
@@ -121,7 +123,7 @@ def _trim_data(data: dict[str, Any]) -> dict[str, Any]:
         for post in eng_posts:
             post["text"] = _strip_html(post.get("text", ""))[:300]
             post.pop("url", None)
-        li["top_posts_by_engagement"] = eng_posts[:15]
+        li["top_posts_by_engagement"] = eng_posts[:linkedin_post_limit]
         li["top_posts_by_impressions_note"] = "Omitted — see top_posts_by_engagement for post content"
         li.pop("top_posts_by_impressions", None)
 
@@ -248,7 +250,7 @@ def build_prompt(
 
     primary_focus = config.get("primary_focus", "") or "(none specified)"
 
-    trimmed = _trim_data(collected_data)
+    trimmed = _trim_data(collected_data, months=months)
     data_json = json.dumps(trimmed, indent=2, default=str)
     upcoming_section = _format_upcoming_section(collected_data)
 
@@ -314,7 +316,7 @@ def build_update_prompt(
     )
     primary_focus = config.get("primary_focus", "") or "(none specified)"
     upcoming_section = _format_upcoming_section(collected_data)
-    trimmed = _trim_data(collected_data)
+    trimmed = _trim_data(collected_data, months=months)
     data_json = json.dumps(trimmed, indent=2, default=str)
 
     return UPDATE_PATH.read_text().format(
