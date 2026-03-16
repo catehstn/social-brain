@@ -211,7 +211,7 @@ python run.py --analyse-only --update  # update prompt from last saved data
 
 ### First run
 
-Paste `reports/prompt-YYYY-WNN.txt` into a **new** claude.ai chat to get the full report and dashboard. Use **Claude Opus** — it handles cross-platform analysis and React artifact generation significantly better than Sonnet.
+Paste `reports/prompt-YYYY-WNN.txt` into a **new** claude.ai chat to get the full report and dashboard. Use **Claude Opus** — it handles cross-platform analysis and React artifact generation significantly better than Sonnet. The prompt instructs Claude to fetch the dashboard template from this repo, so web access must be enabled in your claude.ai settings.
 
 ### Starting a fresh chat (context window reset)
 
