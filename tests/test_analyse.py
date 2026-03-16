@@ -167,11 +167,11 @@ class TestTrimData:
         scores = [p["favourites"] for p in result["mastodon"]["posts"]]
         assert scores == sorted(scores, reverse=True)
 
-    def test_mastodon_caps_at_30(self):
+    def test_mastodon_caps_at_15(self):
         posts = [self._mastodon_post(favourites=i) for i in range(50)]
         data = {"mastodon": {"posts": posts}}
         result = analyse._trim_data(data)
-        assert len(result["mastodon"]["posts"]) == 30
+        assert len(result["mastodon"]["posts"]) == 15
 
     def test_mastodon_note_added(self):
         posts = [self._mastodon_post() for _ in range(5)]
@@ -201,11 +201,11 @@ class TestTrimData:
         scores = [p["likes"] for p in result["bluesky"]["posts"]]
         assert scores == sorted(scores, reverse=True)
 
-    def test_bluesky_caps_at_30(self):
+    def test_bluesky_caps_at_15(self):
         posts = [self._bluesky_post(likes=i) for i in range(50)]
         data = {"bluesky": {"posts": posts}}
         result = analyse._trim_data(data)
-        assert len(result["bluesky"]["posts"]) == 30
+        assert len(result["bluesky"]["posts"]) == 15
 
     def test_bluesky_note_added(self):
         data = {"bluesky": {"posts": [self._bluesky_post()]}}
@@ -272,6 +272,97 @@ class TestTrimData:
     def test_empty_data_no_crash(self):
         result = analyse._trim_data({})
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _trim_data — LinkedIn
+# ---------------------------------------------------------------------------
+
+class TestTrimDataLinkedIn:
+    def _linkedin_post(self, text="Post text", impressions=100, engagements=10):
+        return {"text": text, "impressions": impressions, "engagements": engagements}
+
+    def _linkedin_data(self, num_posts=5, num_daily=10):
+        return {
+            "linkedin": {
+                "top_posts_by_engagement": [self._linkedin_post() for _ in range(num_posts)],
+                "top_posts_by_impressions": [self._linkedin_post() for _ in range(num_posts)],
+                "daily_engagement": [{"date": f"2025-01-{i+1:02d}", "impressions": i} for i in range(num_daily)],
+                "demographics": {"seniority": {"Senior": 0.4}},
+            }
+        }
+
+    def test_drops_impressions_list(self):
+        data = self._linkedin_data()
+        result = analyse._trim_data(data)
+        assert "top_posts_by_impressions" not in result["linkedin"]
+
+    def test_adds_impressions_note(self):
+        data = self._linkedin_data()
+        result = analyse._trim_data(data)
+        assert "top_posts_by_impressions_note" in result["linkedin"]
+
+    def test_drops_demographics(self):
+        data = self._linkedin_data()
+        result = analyse._trim_data(data)
+        assert "demographics" not in result["linkedin"]
+
+    def test_caps_engagement_posts_at_15_weekly(self):
+        data = self._linkedin_data(num_posts=50)
+        result = analyse._trim_data(data)
+        assert len(result["linkedin"]["top_posts_by_engagement"]) == 15
+
+    def test_caps_engagement_posts_at_25_monthly(self):
+        data = self._linkedin_data(num_posts=50)
+        result = analyse._trim_data(data, months=3)
+        assert len(result["linkedin"]["top_posts_by_engagement"]) == 25
+
+    def test_truncates_post_text(self):
+        long_text = "x" * 1000
+        data = {"linkedin": {
+            "top_posts_by_engagement": [self._linkedin_post(text=long_text)],
+            "top_posts_by_impressions": [],
+            "daily_engagement": [],
+        }}
+        result = analyse._trim_data(data)
+        assert len(result["linkedin"]["top_posts_by_engagement"][0]["text"]) <= 300
+
+    def test_drops_post_url(self):
+        data = {"linkedin": {
+            "top_posts_by_engagement": [{"text": "hi", "url": "https://linkedin.com/post/123"}],
+            "top_posts_by_impressions": [],
+            "daily_engagement": [],
+        }}
+        result = analyse._trim_data(data)
+        assert "url" not in result["linkedin"]["top_posts_by_engagement"][0]
+
+    def test_caps_daily_engagement_at_30(self):
+        data = self._linkedin_data(num_daily=60)
+        result = analyse._trim_data(data)
+        assert len(result["linkedin"]["daily_engagement"]) == 30
+
+    def test_daily_engagement_note_added_when_capped(self):
+        data = self._linkedin_data(num_daily=60)
+        result = analyse._trim_data(data)
+        assert "daily_engagement_note" in result["linkedin"]
+
+    def test_daily_engagement_keeps_most_recent(self):
+        days = [{"date": f"day-{i}", "impressions": i} for i in range(60)]
+        data = {"linkedin": {
+            "top_posts_by_engagement": [],
+            "top_posts_by_impressions": [],
+            "daily_engagement": days,
+        }}
+        result = analyse._trim_data(data)
+        kept = result["linkedin"]["daily_engagement"]
+        # Should keep the last 30 (most recent)
+        assert kept[0]["date"] == "day-30"
+        assert kept[-1]["date"] == "day-59"
+
+    def test_no_crash_when_linkedin_missing_keys(self):
+        data = {"linkedin": {}}
+        result = analyse._trim_data(data)
+        assert "linkedin" in result
 
 
 # ---------------------------------------------------------------------------
@@ -483,10 +574,11 @@ class TestBuildPrompt:
             result = analyse.build_prompt({}, config, "2025-W23")
         assert "(none specified)" in result
 
-    def test_dashboard_content_in_prompt(self, tmp_path):
-        with patch_templates(tmp_path):
-            result = analyse.build_prompt({}, self._base_config(), "2025-W23")
-        assert "// stub dashboard" in result
+    def test_dashboard_github_url_in_preamble(self):
+        # The real preamble.txt must reference the public GitHub repo
+        preamble = analyse.PREAMBLE_PATH.read_text()
+        assert "catehstn/social-brain" in preamble
+        assert "Dashboard.jsx" in preamble
 
 
 # ---------------------------------------------------------------------------
