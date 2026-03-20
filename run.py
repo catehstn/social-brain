@@ -123,6 +123,52 @@ def load_latest_raw() -> tuple[dict, str]:
         return json.load(f), label
 
 
+def check_drop_staleness() -> list[str]:
+    """
+    Check file-drop directories for stale exports.
+    Returns a list of warning strings for any that are out of date.
+    Only warns if files exist (i.e. the user has previously dropped exports).
+    """
+    now = datetime.now(timezone.utc)
+    warnings: list[str] = []
+
+    def _most_recent(*globs: str) -> Path | None:
+        files = []
+        for g in globs:
+            parts = g.rsplit("/", 1)
+            if len(parts) == 2:
+                files.extend(Path(parts[0]).glob(parts[1]) if Path(parts[0]).exists() else [])
+            else:
+                files.extend(Path(".").glob(g))
+        return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+    # LinkedIn and Substack: must be < 24 hours old
+    for label, *globs in [
+        ("LinkedIn", "linkedin_drops/*.csv", "linkedin_drops/*.xlsx"),
+        ("Substack", "substack_drops/*.csv"),
+    ]:
+        newest = _most_recent(*globs)
+        if newest:
+            age = now - datetime.fromtimestamp(newest.stat().st_mtime, tz=timezone.utc)
+            if age > timedelta(hours=24):
+                hours = age.total_seconds() / 3600
+                warnings.append(
+                    f"{label}: export '{newest.name}' is {hours:.0f}h old — download a fresh export first."
+                )
+
+    # O'Reilly: warn if most recent .eml is > 25 days old (monthly payment cycle)
+    newest_or = _most_recent("oreilly_drops/*.eml")
+    if newest_or:
+        age = now - datetime.fromtimestamp(newest_or.stat().st_mtime, tz=timezone.utc)
+        if age > timedelta(days=25):
+            warnings.append(
+                f"O'Reilly: most recent statement '{newest_or.name}' is {age.days} days old — "
+                f"check your email for a new remittance statement."
+            )
+
+    return warnings
+
+
 def since_last_run() -> datetime | None:
     """
     Return the mtime of the most recent snapshot if it's older than 2 weeks,
@@ -200,6 +246,23 @@ def main() -> None:
             logger.info("Last run was %s — extending lookback to cover gap", gap.date())
 
     label = week_label(months=args.months)
+
+    # ------------------------------------------------------------------
+    # Staleness check
+    # ------------------------------------------------------------------
+    if not args.analyse_only:
+        stale = check_drop_staleness()
+        if stale:
+            print("\nWarning: stale data detected:")
+            for w in stale:
+                print(f"  • {w}")
+            try:
+                answer = input("\nContinue anyway? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            if answer != "y":
+                logger.info("Aborted by user.")
+                sys.exit(0)
 
     # ------------------------------------------------------------------
     # Collection

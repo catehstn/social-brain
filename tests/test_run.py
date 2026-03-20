@@ -490,3 +490,118 @@ class TestParseArgs:
         )
         assert set(action.choices) == set(PLATFORM_COLLECTORS.keys())
         assert len(action.choices) == len(PLATFORM_COLLECTORS)
+
+
+# ---------------------------------------------------------------------------
+# check_drop_staleness
+# ---------------------------------------------------------------------------
+
+class TestCheckDropStaleness:
+    def _write_csv(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("col\nval\n")
+        return path
+
+    def _write_eml(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("From: test@example.com\nSubject: Payment\n\nHello\n")
+        return path
+
+    def test_no_drops_returns_empty_list(self, tmp_path, monkeypatch):
+        """No files in any drop directory → no warnings."""
+        monkeypatch.chdir(tmp_path)
+        assert run.check_drop_staleness() == []
+
+    def test_recent_linkedin_csv_no_warning(self, tmp_path, monkeypatch):
+        """LinkedIn CSV < 24h old → no warning."""
+        monkeypatch.chdir(tmp_path)
+        self._write_csv(tmp_path / "linkedin_drops" / "export.csv")
+        warnings = run.check_drop_staleness()
+        assert not any("LinkedIn" in w for w in warnings)
+
+    def test_stale_linkedin_csv_warns(self, tmp_path, monkeypatch):
+        """LinkedIn CSV > 24h old → warning."""
+        monkeypatch.chdir(tmp_path)
+        export = tmp_path / "linkedin_drops" / "export.csv"
+        self._write_csv(export)
+        stale = time.time() - 25 * 3600
+        import os
+        os.utime(export, (stale, stale))
+        warnings = run.check_drop_staleness()
+        assert any("LinkedIn" in w for w in warnings)
+
+    def test_recent_substack_csv_no_warning(self, tmp_path, monkeypatch):
+        """Substack CSV < 24h old → no warning."""
+        monkeypatch.chdir(tmp_path)
+        self._write_csv(tmp_path / "substack_drops" / "export.csv")
+        warnings = run.check_drop_staleness()
+        assert not any("Substack" in w for w in warnings)
+
+    def test_stale_substack_csv_warns(self, tmp_path, monkeypatch):
+        """Substack CSV > 24h old → warning."""
+        monkeypatch.chdir(tmp_path)
+        export = tmp_path / "substack_drops" / "export.csv"
+        self._write_csv(export)
+        stale = time.time() - 25 * 3600
+        import os
+        os.utime(export, (stale, stale))
+        warnings = run.check_drop_staleness()
+        assert any("Substack" in w for w in warnings)
+
+    def test_no_drops_directory_no_warning(self, tmp_path, monkeypatch):
+        """Missing drop directories don't cause warnings."""
+        monkeypatch.chdir(tmp_path)
+        # Don't create any directories
+        assert run.check_drop_staleness() == []
+
+    def test_stale_oreilly_eml_warns(self, tmp_path, monkeypatch):
+        """O'Reilly .eml > 25 days old → warning."""
+        monkeypatch.chdir(tmp_path)
+        eml = tmp_path / "oreilly_drops" / "payment.eml"
+        self._write_eml(eml)
+        stale = time.time() - 26 * 24 * 3600
+        import os
+        os.utime(eml, (stale, stale))
+        warnings = run.check_drop_staleness()
+        assert any("O'Reilly" in w for w in warnings)
+
+    def test_recent_oreilly_eml_no_warning(self, tmp_path, monkeypatch):
+        """O'Reilly .eml < 25 days old → no warning."""
+        monkeypatch.chdir(tmp_path)
+        eml = tmp_path / "oreilly_drops" / "payment.eml"
+        self._write_eml(eml)
+        # 10 days old → no warn
+        recent = time.time() - 10 * 24 * 3600
+        import os
+        os.utime(eml, (recent, recent))
+        warnings = run.check_drop_staleness()
+        assert not any("O'Reilly" in w for w in warnings)
+
+    def test_multiple_stale_files_warn_for_each(self, tmp_path, monkeypatch):
+        """Multiple stale files → warning for each platform."""
+        monkeypatch.chdir(tmp_path)
+        stale_time = time.time() - 25 * 3600
+        import os
+
+        li = tmp_path / "linkedin_drops" / "li.csv"
+        self._write_csv(li)
+        os.utime(li, (stale_time, stale_time))
+
+        ss = tmp_path / "substack_drops" / "ss.csv"
+        self._write_csv(ss)
+        os.utime(ss, (stale_time, stale_time))
+
+        warnings = run.check_drop_staleness()
+        assert any("LinkedIn" in w for w in warnings)
+        assert any("Substack" in w for w in warnings)
+
+    def test_warning_includes_filename(self, tmp_path, monkeypatch):
+        """Warning message includes the stale filename."""
+        monkeypatch.chdir(tmp_path)
+        export = tmp_path / "linkedin_drops" / "my_export.csv"
+        self._write_csv(export)
+        stale = time.time() - 25 * 3600
+        import os
+        os.utime(export, (stale, stale))
+        warnings = run.check_drop_staleness()
+        assert any("my_export.csv" in w for w in warnings)

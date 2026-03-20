@@ -35,12 +35,12 @@ def collect_substack(substack_drops_dir: str | Path = "substack_drops") -> dict[
 
     csv_path = csv_files[0]
     file_age = _utcnow() - datetime.fromtimestamp(csv_path.stat().st_mtime, tz=timezone.utc)
-    if file_age > timedelta(weeks=2):
+    if file_age > timedelta(hours=24):
         logger.warning(
-            "Substack: export file %s is %d days old — data may be missing recent activity. "
-            "Consider downloading a fresh export.",
+            "Substack: export file %s is %d days old (%.0f hours) — download a fresh export from Substack before running.",
             csv_path.name,
             file_age.days,
+            file_age.total_seconds() / 3600,
         )
     logger.info("Substack: reading %s", csv_path)
 
