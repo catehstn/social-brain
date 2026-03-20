@@ -9,7 +9,6 @@ from collectors.bluesky import collect_bluesky
 from collectors.buttondown import collect_buttondown
 from collectors.jetpack import collect_jetpack
 from collectors.linkedin import collect_linkedin
-from collectors.substack import collect_substack
 from collectors.vercel import collect_vercel
 from collectors.amazon import collect_amazon
 from collectors.upcoming import collect_upcoming
@@ -26,7 +25,6 @@ PLATFORM_COLLECTORS = {
     "buttondown": "collect_buttondown",
     "jetpack": "collect_jetpack",
     "linkedin": "collect_linkedin",
-    "substack": "collect_substack",
     "vercel": "collect_vercel",
     "amazon": "collect_amazon",
     "upcoming": "collect_upcoming",
@@ -87,8 +85,6 @@ def collect_all(
             data = collect_jetpack(jetpack_site, jetpack_token, since=since)
         elif name == "linkedin":
             data = collect_linkedin()
-        elif name == "substack":
-            data = collect_substack()
         elif name == "amazon":
             asins = config.get("amazon_asins", [])
             if not asins:
