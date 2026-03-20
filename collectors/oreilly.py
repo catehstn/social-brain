@@ -159,6 +159,15 @@ def collect_oreilly(oreilly_drops_dir: str | Path = "oreilly_drops") -> dict[str
 
     payments.sort(key=lambda p: p["payment_date"])
 
+    most_recent_date = datetime.strptime(payments[-1]["payment_date"], "%Y-%m-%d")
+    days_since = (_utcnow().replace(tzinfo=None) - most_recent_date).days
+    if days_since >= 25:
+        logger.warning(
+            "O'Reilly: most recent payment was %d days ago (%s) — check your email for a new remittance statement.",
+            days_since,
+            payments[-1]["payment_date"],
+        )
+
     total_paid = sum(p["amount"] for p in payments)
     currencies = list({p["currency"] for p in payments if p["currency"]})
 

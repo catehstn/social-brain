@@ -65,15 +65,22 @@ def collect_calendly(
             r.raise_for_status()
             canceled_events = r.json().get("collection", [])
 
+        # If a lead_gen_event is specified, restrict counting to that event type only
+        def _event_name(event: dict) -> str:
+            et_uri = event.get("event_type", "")
+            return event_type_names.get(et_uri, et_uri.split("/")[-1])
+
+        if lead_gen_event:
+            active_events = [e for e in active_events if _event_name(e) == lead_gen_event]
+            canceled_events = [e for e in canceled_events if _event_name(e) == lead_gen_event]
+
         # Aggregate by event type
         by_type: dict[str, dict[str, int]] = {}
         for event in active_events:
-            et_uri = event.get("event_type", "")
-            name = event_type_names.get(et_uri, et_uri.split("/")[-1])
+            name = _event_name(event)
             by_type.setdefault(name, {"active": 0, "canceled": 0})["active"] += 1
         for event in canceled_events:
-            et_uri = event.get("event_type", "")
-            name = event_type_names.get(et_uri, et_uri.split("/")[-1])
+            name = _event_name(event)
             by_type.setdefault(name, {"active": 0, "canceled": 0})["canceled"] += 1
 
         bookings_by_type = [

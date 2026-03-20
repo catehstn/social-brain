@@ -225,12 +225,12 @@ def collect_linkedin(linkedin_drops_dir: str | Path = "linkedin_drops") -> dict[
 
     export_path = export_files[0]
     file_age = _utcnow() - datetime.fromtimestamp(export_path.stat().st_mtime, tz=timezone.utc)
-    if file_age > timedelta(weeks=2):
+    if file_age > timedelta(hours=24):
         logger.warning(
-            "LinkedIn: export file %s is %d days old — data may be missing recent activity. "
-            "Consider downloading a fresh export.",
+            "LinkedIn: export file %s is %d days old (%.0f hours) — download a fresh export from LinkedIn before running.",
             export_path.name,
             file_age.days,
+            file_age.total_seconds() / 3600,
         )
     logger.info("LinkedIn: reading %s", export_path)
 

@@ -463,6 +463,26 @@ class TestCollectLinkedin:
             collect_linkedin(linkedin_drops_dir=tmp_path)
         assert not any("days old" in r.message for r in caplog.records)
 
+    def test_file_under_24h_no_stale_warning(self, tmp_path, caplog):
+        import logging, os
+        export = tmp_path / "export.csv"
+        self._write_csv(export, [self._csv_row()])
+        # Set mtime to 23 hours ago — should NOT warn
+        os.utime(export, (time.time() - 23 * 3600, time.time() - 23 * 3600))
+        with caplog.at_level(logging.WARNING, logger="collectors.linkedin"):
+            collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert not any("days old" in r.message for r in caplog.records)
+
+    def test_file_over_24h_logs_stale_warning(self, tmp_path, caplog):
+        import logging, os
+        export = tmp_path / "export.csv"
+        self._write_csv(export, [self._csv_row()])
+        # Set mtime to 25 hours ago — should warn
+        os.utime(export, (time.time() - 25 * 3600, time.time() - 25 * 3600))
+        with caplog.at_level(logging.WARNING, logger="collectors.linkedin"):
+            collect_linkedin(linkedin_drops_dir=tmp_path)
+        assert any("days old" in r.message for r in caplog.records)
+
     def test_stale_file_logs_warning(self, tmp_path, caplog):
         import logging
         import os
@@ -523,6 +543,28 @@ class TestCollectSubstack:
         with caplog.at_level(logging.WARNING, logger="collectors.substack"):
             collect_substack(substack_drops_dir=tmp_path)
         assert any("days old" in r.message for r in caplog.records)
+
+    def test_file_under_24h_no_stale_warning(self, tmp_path, caplog):
+        import logging, os
+        from collect import collect_substack
+        export = tmp_path / "export.csv"
+        self._write_csv(export, [self._csv_row()])
+        # 23 hours old — should NOT warn
+        os.utime(export, (time.time() - 23 * 3600, time.time() - 23 * 3600))
+        with caplog.at_level(logging.WARNING, logger="collectors.substack"):
+            collect_substack(substack_drops_dir=tmp_path)
+        assert not any("hours" in r.message for r in caplog.records)
+
+    def test_file_over_24h_logs_stale_warning(self, tmp_path, caplog):
+        import logging, os
+        from collect import collect_substack
+        export = tmp_path / "export.csv"
+        self._write_csv(export, [self._csv_row()])
+        # 25 hours old — should warn
+        os.utime(export, (time.time() - 25 * 3600, time.time() - 25 * 3600))
+        with caplog.at_level(logging.WARNING, logger="collectors.substack"):
+            collect_substack(substack_drops_dir=tmp_path)
+        assert any("hours" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +707,34 @@ class TestCollectOreilly:
         items = result["payments"][0]["line_items"]
         assert len(items) == 1
         assert items[0]["amount_withheld"] == pytest.approx(25.0)
+
+    def test_recent_payment_no_staleness_warning(self, tmp_path, caplog):
+        """Payment < 25 days ago — no warning about new statement."""
+        import logging
+        from unittest.mock import patch
+        from datetime import datetime, timezone
+        from collect import collect_oreilly
+        # Fix "now" to 2026-03-20; payment on 2026-03-10 = 10 days ago → no warn
+        fixed_now = datetime(2026, 3, 20, tzinfo=timezone.utc)
+        _write_oreilly_eml(tmp_path / "payment.eml", payment_date="Mar 10, 2026")
+        with patch("collectors.oreilly._utcnow", return_value=fixed_now):
+            with caplog.at_level(logging.WARNING, logger="collectors.oreilly"):
+                collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert not any("days ago" in r.message for r in caplog.records)
+
+    def test_old_payment_logs_staleness_warning(self, tmp_path, caplog):
+        """Payment ≥ 25 days ago — warn about checking email for new statement."""
+        import logging
+        from unittest.mock import patch
+        from datetime import datetime, timezone
+        from collect import collect_oreilly
+        # Fix "now" to 2026-03-20; payment on 2026-01-15 = 64 days ago → warn
+        fixed_now = datetime(2026, 3, 20, tzinfo=timezone.utc)
+        _write_oreilly_eml(tmp_path / "payment.eml", payment_date="Jan 15, 2026")
+        with patch("collectors.oreilly._utcnow", return_value=fixed_now):
+            with caplog.at_level(logging.WARNING, logger="collectors.oreilly"):
+                collect_oreilly(oreilly_drops_dir=tmp_path)
+        assert any("days ago" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -1296,6 +1366,47 @@ class TestCollectCalendly:
         result = collect_calendly("tok", since=SINCE)
         assert "lead_gen_bookings" not in result
         assert "lead_gen_event" not in result
+
+    def test_lead_gen_event_filters_total_bookings(self, respx_mock):
+        """When lead_gen_event is set, total_bookings counts only that event type."""
+        _calendly_mock(respx_mock)
+        active = [
+            {"event_type": ET_URI_INTRO},
+            {"event_type": ET_URI_INTRO},
+            {"event_type": ET_URI_CONSULT},  # different event — should be excluded
+        ]
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE, lead_gen_event="Intro call")
+        # total_bookings should only count the Intro call events, not the Consult
+        assert result["total_bookings"] == 2
+        assert result["lead_gen_bookings"] == 2
+        assert len(result["bookings_by_type"]) == 1
+        assert result["bookings_by_type"][0]["event_type"] == "Intro call"
+
+    def test_lead_gen_event_no_filter_without_setting(self, respx_mock):
+        """Without lead_gen_event, total_bookings counts all event types."""
+        _calendly_mock(respx_mock)
+        active = [
+            {"event_type": ET_URI_INTRO},
+            {"event_type": ET_URI_CONSULT},
+        ]
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE)
+        assert result["total_bookings"] == 2  # both event types counted
 
 
 # ---------------------------------------------------------------------------
