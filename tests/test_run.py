@@ -537,8 +537,8 @@ class TestCheckDropStaleness:
         warnings = run.check_drop_staleness()
         assert not any("Substack" in w for w in warnings)
 
-    def test_stale_substack_csv_warns(self, tmp_path, monkeypatch):
-        """Substack CSV > 24h old → warning."""
+    def test_stale_substack_csv_no_warning(self, tmp_path, monkeypatch):
+        """Substack CSV (even stale) → no warning — user doesn't use Substack."""
         monkeypatch.chdir(tmp_path)
         export = tmp_path / "substack_drops" / "export.csv"
         self._write_csv(export)
@@ -546,7 +546,7 @@ class TestCheckDropStaleness:
         import os
         os.utime(export, (stale, stale))
         warnings = run.check_drop_staleness()
-        assert any("Substack" in w for w in warnings)
+        assert not any("Substack" in w for w in warnings)
 
     def test_no_drops_directory_no_warning(self, tmp_path, monkeypatch):
         """Missing drop directories don't cause warnings."""
@@ -587,13 +587,8 @@ class TestCheckDropStaleness:
         self._write_csv(li)
         os.utime(li, (stale_time, stale_time))
 
-        ss = tmp_path / "substack_drops" / "ss.csv"
-        self._write_csv(ss)
-        os.utime(ss, (stale_time, stale_time))
-
         warnings = run.check_drop_staleness()
         assert any("LinkedIn" in w for w in warnings)
-        assert any("Substack" in w for w in warnings)
 
     def test_warning_includes_filename(self, tmp_path, monkeypatch):
         """Warning message includes the stale filename."""

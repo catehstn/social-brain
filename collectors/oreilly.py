@@ -134,21 +134,97 @@ def _parse_oreilly_eml(path: Path) -> dict[str, Any] | None:
     }
 
 
+def _parse_oreilly_rtf(path: Path) -> dict[str, Any] | None:
+    """
+    Parse a single O'Reilly Payment Remittance Advice .rtf file.
+    Strips RTF control words and extracts key fields via regex.
+    """
+    try:
+        with path.open("rb") as f:
+            raw = f.read().decode("latin-1", errors="replace")
+    except Exception as exc:
+        logger.warning("O'Reilly: could not read %s: %s", path.name, exc)
+        return None
+
+    # Strip RTF control words, braces, and backslashes to get plain text
+    text = re.sub(r"\\[a-z*]+[-]?\d* ?", " ", raw)
+    text = re.sub(r"[{}\\]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    def _field(label: str, n_tokens: int = 1) -> str | None:
+        """Return the next n_tokens of plain text after label."""
+        m = re.search(re.escape(label) + r"\s+((?:\S+\s*){" + str(n_tokens) + r"})", text)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    # Payment Date is 3 tokens: "Aug 29, 2025"
+    payment_date_str = _field("Payment Date", 3)
+    amount_str = _field("Payment Amount")
+    currency = _field("Payment Currency")
+    doc_number = _field("Paper Document Number")
+
+    if not payment_date_str or not amount_str:
+        logger.warning("O'Reilly: could not parse key fields from %s", path.name)
+        return None
+
+    # Normalise "Aug 29, 2025" (comma may be attached to day token)
+    payment_date_str = payment_date_str.replace(",", "").strip()
+    # Tokens: "Aug 29 2025" after stripping comma
+    try:
+        payment_date = datetime.strptime(payment_date_str, "%b %d %Y").strftime("%Y-%m-%d")
+        amount = float(amount_str.replace(",", ""))
+    except (ValueError, AttributeError) as exc:
+        logger.warning("O'Reilly: failed to parse values from %s: %s", path.name, exc)
+        return None
+
+    # Extract line items: doc-ref pattern followed by 6 more tokens
+    line_items = []
+    for m in re.finditer(r"([A-Z]+-\d+)\s+(\S+)\s+(ROYALTY\s+STATEMENT)\s+([\d.,]+)\s+([A-Z]{3})\s+([\d.,]+)\s+([\d.,]+)", text):
+        try:
+            doc_ref, doc_date, desc, doc_amt, cur, discount, amt_paid = m.groups()
+            line_items.append({
+                "doc_ref": doc_ref,
+                "doc_date": doc_date,
+                "description": desc.strip(),
+                "doc_amount": float(doc_amt.replace(",", "")),
+                "currency": cur,
+                "amount_withheld": 0.0,
+                "discount": float(discount.replace(",", "").lstrip(".") or "0"),
+                "amount_paid": float(amt_paid.replace(",", "")),
+            })
+        except (ValueError, AttributeError):
+            continue
+
+    return {
+        "payment_date": payment_date,
+        "doc_number": doc_number,
+        "amount": amount,
+        "currency": currency,
+        "line_items": line_items,
+        "source_file": path.name,
+    }
+
+
 def collect_oreilly(oreilly_drops_dir: str | Path = "oreilly_drops") -> dict[str, Any] | None:
     """
-    Parse all O'Reilly Payment Remittance Advice .eml files from
-    oreilly_drops/ and return the full payment history sorted by date.
+    Parse all O'Reilly Payment Remittance Advice files from oreilly_drops/.
+    Accepts both .eml (MIME email) and .rtf (Mail.app export) formats.
+    Returns the full payment history sorted by date.
     """
     drops_path = Path(oreilly_drops_dir)
-    eml_files = sorted(drops_path.glob("*.eml"), key=lambda p: p.stat().st_mtime)
+    all_files = sorted(
+        list(drops_path.glob("*.eml")) + list(drops_path.glob("*.rtf")),
+        key=lambda p: p.stat().st_mtime,
+    )
 
-    if not eml_files:
-        logger.info("O'Reilly: no .eml files found in %s — skipping", drops_path)
+    if not all_files:
+        logger.info("O'Reilly: no .eml or .rtf files found in %s — skipping", drops_path)
         return None
 
     payments = []
-    for path in eml_files:
-        parsed = _parse_oreilly_eml(path)
+    for path in all_files:
+        parsed = _parse_oreilly_rtf(path) if path.suffix == ".rtf" else _parse_oreilly_eml(path)
         if parsed:
             payments.append(parsed)
         else:
