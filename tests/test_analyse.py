@@ -574,11 +574,17 @@ class TestBuildPrompt:
             result = analyse.build_prompt({}, config, "2025-W23")
         assert "(none specified)" in result
 
-    def test_dashboard_github_url_in_preamble(self):
-        # The real preamble.txt must reference the public GitHub repo
+    def test_dashboard_reference_in_preamble(self):
+        # preamble.txt must include the "Reference Dashboard.jsx:" label that
+        # introduces the embedded dashboard content (not rely on a URL fetch)
         preamble = analyse.PREAMBLE_PATH.read_text()
-        assert "catehstn/social-brain" in preamble
-        assert "Dashboard.jsx" in preamble
+        assert "Reference Dashboard.jsx" in preamble
+
+    def test_dashboard_content_embedded_in_prompt(self, tmp_path):
+        # build_prompt must embed the dashboard content directly
+        with patch_templates(tmp_path):
+            result = analyse.build_prompt({}, self._base_config(), "2025-W23")
+        assert "// stub dashboard" in result
 
 
 # ---------------------------------------------------------------------------
