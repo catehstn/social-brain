@@ -123,6 +123,94 @@ def load_latest_raw() -> tuple[dict, str]:
         return json.load(f), label
 
 
+def _platform_summary(name: str, data: dict) -> str:
+    """Return a brief one-line description of what was collected for a platform."""
+    try:
+        if name == "mastodon":
+            followers = data.get("account", {}).get("followers", "?")
+            posts = len(data.get("posts", []))
+            return f"{followers} followers, {posts} posts"
+        if name == "bluesky":
+            posts = len(data.get("posts", []))
+            return f"{posts} posts"
+        if name == "buttondown":
+            newsletters = len(data.get("newsletters", []))
+            return f"{newsletters} newsletter(s)"
+        if name == "jetpack":
+            return f"{data.get('total_views', '?')} views"
+        if name == "linkedin":
+            days = len(data.get("daily_engagement", []))
+            posts = len(data.get("top_posts_by_engagement", []))
+            return f"{days} days engagement, {posts} top posts"
+        if name == "substack":
+            return f"{len(data.get('emails', []))} emails"
+        if name == "vercel":
+            return f"{data.get('page_views', '?')} views"
+        if name == "amazon":
+            markets = len(data.get("by_marketplace", {}))
+            return f"{markets} marketplace(s)"
+        if name == "goatcounter":
+            return f"{data.get('total_pageviews', '?')} pageviews"
+        if name == "oreilly":
+            count = data.get("payment_count", 0)
+            total = data.get("total_paid", 0.0)
+            currencies = data.get("currencies") or ["?"]
+            return f"{count} payment(s), {currencies[0]} {total:.2f} total"
+        if name == "calendly":
+            bookings = data.get("total_bookings", 0)
+            lead = data.get("lead_gen_bookings")
+            if lead is not None:
+                return f"{bookings} booking(s) ({lead} lead gen)"
+            return f"{bookings} booking(s)"
+        if name == "mentions":
+            sources = data.get("sources", {})
+            hn = len(sources.get("hackernews", []))
+            mastodon = len(sources.get("mastodon", []))
+            bluesky = len(sources.get("bluesky", []))
+            return f"HN: {hn}, Mastodon: {mastodon}, Bluesky: {bluesky}"
+        if name == "upcoming":
+            sources = data.get("sources", {})
+            total = sum(len(v) for v in sources.values() if isinstance(v, list))
+            return f"{total} scheduled item(s)"
+    except Exception:
+        pass
+    return "ok"
+
+
+def _print_run_summary(
+    collected: dict,
+    all_platforms: list[str],
+    prompt_path: Path | None = None,
+    update: bool = False,
+) -> None:
+    """Print a clean end-of-run summary: what was collected and what wasn't."""
+    print("\n" + "=" * 52)
+    print("  Run complete")
+    print("=" * 52)
+
+    present = [p for p in all_platforms if p in collected]
+    missing = [p for p in all_platforms if p not in collected]
+
+    if present:
+        print("\nCollected:")
+        for p in present:
+            print(f"  ✓  {p:<14} {_platform_summary(p, collected[p])}")
+
+    if missing:
+        print("\nNot collected (no config, no files, or no data):")
+        for p in missing:
+            print(f"  –  {p}")
+
+    if prompt_path:
+        action = "Paste into your existing claude.ai chat" if update else "Paste into claude.ai"
+        size_kb = f"{prompt_path.stat().st_size // 1024} KB" if prompt_path.exists() else ""
+        size_str = f" ({size_kb})" if size_kb else ""
+        print(f"\nPrompt{size_str}: {prompt_path}")
+        print(f"→  {action}")
+
+    print("=" * 52 + "\n")
+
+
 def since_last_run() -> datetime | None:
     """
     Return the mtime of the most recent snapshot if it's older than 2 weeks,
@@ -247,7 +335,8 @@ def main() -> None:
                 store_update(collected)
 
         if args.collect_only:
-            logger.info("--collect-only: done.")
+            from collectors import PLATFORM_COLLECTORS
+            _print_run_summary(collected, list(PLATFORM_COLLECTORS.keys()))
             return
 
     # ------------------------------------------------------------------
@@ -255,11 +344,6 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.analyse_only:
         collected, label = load_latest_raw()
-        logger.info(
-            "Loaded data from snapshot '%s' with platforms: %s",
-            label,
-            ", ".join(collected.keys()) if collected else "(empty)",
-        )
 
     if not collected:
         logger.warning(
@@ -268,12 +352,10 @@ def main() -> None:
 
     logger.info("=== Building analysis prompt ===")
     from analyse import save_prompt
+    from collectors import PLATFORM_COLLECTORS
 
     prompt_path = save_prompt(collected, config, period=label, reports_dir=REPORTS_DIR, months=args.months, update=args.update)
-    if args.update:
-        logger.info("=== Done. Paste %s into your existing claude.ai chat to update the report ===", prompt_path)
-    else:
-        logger.info("=== Done. Paste %s into claude.ai to get your report ===", prompt_path)
+    _print_run_summary(collected, list(PLATFORM_COLLECTORS.keys()), prompt_path=prompt_path, update=args.update)
 
 
 if __name__ == "__main__":
