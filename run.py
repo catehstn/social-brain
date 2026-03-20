@@ -212,7 +212,7 @@ def _platform_expected(name: str, config: dict) -> bool:
     if name == "goatcounter":
         return bool(config.get("goatcounter_site") and config.get("goatcounter_token"))
     if name == "oreilly":
-        return _has_files("oreilly_drops/*.eml")
+        return _has_files("oreilly_drops/*.eml", "oreilly_drops/*.rtf")
     if name == "calendly":
         return bool(config.get("calendly_token"))
     return False

@@ -27,6 +27,7 @@ substack_drops/*.csv
 
 # O'Reilly payment emails (contain financial/personal data)
 oreilly_drops/*.eml
+oreilly_drops/*.rtf
 
 # =============================================================================
 # Python
