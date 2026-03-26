@@ -179,6 +179,11 @@ class TestTrimData:
         result = analyse._trim_data(data)
         assert "note" in result["mastodon"]
 
+    def test_mastodon_none_content_does_not_crash(self):
+        data = {"mastodon": {"posts": [self._mastodon_post(content=None)]}}
+        result = analyse._trim_data(data)
+        assert result["mastodon"]["posts"][0]["content"] == ""
+
     # Bluesky
     def test_bluesky_truncates_text(self):
         data = {"bluesky": {"posts": [self._bluesky_post(text="y" * 300)]}}
@@ -363,6 +368,15 @@ class TestTrimDataLinkedIn:
         data = {"linkedin": {}}
         result = analyse._trim_data(data)
         assert "linkedin" in result
+
+    def test_none_post_text_does_not_crash(self):
+        data = {"linkedin": {
+            "top_posts_by_engagement": [{"text": None, "impressions": 10, "engagements": 1}],
+            "top_posts_by_impressions": [],
+            "daily_engagement": [],
+        }}
+        result = analyse._trim_data(data)
+        assert result["linkedin"]["top_posts_by_engagement"][0]["text"] == ""
 
 
 # ---------------------------------------------------------------------------
