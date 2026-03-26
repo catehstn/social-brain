@@ -90,7 +90,7 @@ def _trim_data(data: dict[str, Any], months: int | None = None) -> dict[str, Any
     # Mastodon: strip HTML, truncate, drop non-analytics fields, keep top 15 by engagement
     mastodon_posts = data.get("mastodon", {}).get("posts", [])
     for post in mastodon_posts:
-        post["content"] = _strip_html(post.get("content", ""))[:200]
+        post["content"] = _strip_html(post.get("content") or "")[:200]
         post.pop("id", None)
         post.pop("url", None)
     mastodon_posts.sort(
@@ -121,7 +121,7 @@ def _trim_data(data: dict[str, Any], months: int | None = None) -> dict[str, Any
         # Truncate post text and keep top 15 by engagement; drop impressions list (overlaps heavily)
         eng_posts = li.get("top_posts_by_engagement", [])
         for post in eng_posts:
-            post["text"] = _strip_html(post.get("text", ""))[:300]
+            post["text"] = _strip_html(post.get("text") or "")[:300]
             post.pop("url", None)
         li["top_posts_by_engagement"] = eng_posts[:linkedin_post_limit]
         li["top_posts_by_impressions_note"] = "Omitted — see top_posts_by_engagement for post content"
