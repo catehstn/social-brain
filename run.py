@@ -10,15 +10,19 @@ Usage:
     python run.py --platform <name>        # collect only one platform
     python run.py --update                 # collect + build a compact update prompt for the same chat
     python run.py --analyse-only --update  # update prompt from most recent saved data
+    python run.py --extract 2026-03-01     # extract posts from date to today (CSV to stdout)
+    python run.py --extract 2026-03-01:2026-03-31  # extract posts in date range
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 
 import yaml
@@ -308,6 +312,90 @@ def _print_run_summary(
     print("=" * 52 + "\n")
 
 
+def extract_posts(date_range: str) -> None:
+    """Extract posts from analytics.xlsx and write CSV to stdout."""
+
+    parts = date_range.split(":")
+    try:
+        start = datetime.strptime(parts[0].strip(), "%Y-%m-%d").date()
+        end = datetime.strptime(parts[1].strip(), "%Y-%m-%d").date() if len(parts) > 1 else datetime.now(timezone.utc).date()
+    except ValueError:
+        logger.error("Invalid date range '%s'. Expected YYYY-MM-DD or YYYY-MM-DD:YYYY-MM-DD", date_range)
+        sys.exit(1)
+
+    store_path = ROOT / "data" / "analytics.xlsx"
+    if not store_path.exists():
+        logger.error("analytics.xlsx not found — run without --extract first to collect data.")
+        sys.exit(1)
+
+    import openpyxl
+
+    class _HTMLStripper(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self._parts: list[str] = []
+        def handle_data(self, data: str) -> None:
+            self._parts.append(data)
+        def stripped(self) -> str:
+            return " ".join(self._parts).strip()
+
+    def strip_html(html: str) -> str:
+        s = _HTMLStripper()
+        s.feed(html)
+        return s.stripped()
+
+    def parse_date(val: object) -> date | None:
+        if val is None:
+            return None
+        s = str(val).strip()
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(s[: len(fmt) + 4], fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    wb = openpyxl.load_workbook(store_path)
+    posts: list[dict] = []
+
+    def _read_sheet(sheet_name: str, date_col: str, text_col: str, platform: str, html: bool = False) -> None:
+        if sheet_name not in wb.sheetnames:
+            return
+        ws = wb[sheet_name]
+        headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            r = dict(zip(headers, row))
+            d = parse_date(r.get(date_col))
+            if d and start <= d <= end:
+                text = r.get(text_col) or ""
+                posts.append({
+                    "date": d,
+                    "platform": platform,
+                    "text": strip_html(text) if html else str(text).strip(),
+                })
+
+    _DATE_COLS = ["created_at", "date", "send_date", "indexed_at"]
+    _TEXT_COLS = ["content", "text", "subject"]
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        header_set = {h for h in headers if h}
+        date_col = next((c for c in _DATE_COLS if c in header_set), None)
+        text_col = next((c for c in _TEXT_COLS if c in header_set), None)
+        if date_col and text_col:
+            _read_sheet(sheet_name, date_col, text_col, sheet_name, html=(text_col == "content"))
+
+    posts.sort(key=lambda p: p["date"])
+
+    writer = csv.writer(sys.stdout)
+    writer.writerow(["date", "platform", "text"])
+    for p in posts:
+        writer.writerow([p["date"], p["platform"], p["text"]])
+
+    logger.info("Extracted %d post(s) from %s to %s", len(posts), start, end)
+
+
 def since_last_run() -> datetime | None:
     """
     Return the mtime of the most recent snapshot if it's older than 2 weeks,
@@ -343,6 +431,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip collection and analyse the most recent saved raw data.",
     )
+    mode.add_argument(
+        "--extract",
+        metavar="RANGE",
+        help="Extract posts from analytics.xlsx and write CSV to stdout. "
+             "RANGE is YYYY-MM-DD (from date to today) or YYYY-MM-DD:YYYY-MM-DD.",
+    )
     from collectors import PLATFORM_COLLECTORS
     parser.add_argument(
         "--platform",
@@ -367,6 +461,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    if args.extract:
+        extract_posts(args.extract)
+        return
 
     if args.analyse_only and args.platform:
         logger.error("--analyse-only and --platform cannot be used together.")
