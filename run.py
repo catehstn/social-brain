@@ -374,9 +374,17 @@ def extract_posts(date_range: str) -> None:
                     "text": strip_html(text) if html else str(text).strip(),
                 })
 
-    _read_sheet("mastodon_posts", "created_at", "content", "mastodon", html=True)
-    _read_sheet("bluesky_posts", "created_at", "text", "bluesky")
-    _read_sheet("linkedin_posts", "date", "text", "linkedin")
+    _DATE_COLS = ["created_at", "date", "send_date", "indexed_at"]
+    _TEXT_COLS = ["content", "text", "subject"]
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        header_set = {h for h in headers if h}
+        date_col = next((c for c in _DATE_COLS if c in header_set), None)
+        text_col = next((c for c in _TEXT_COLS if c in header_set), None)
+        if date_col and text_col:
+            _read_sheet(sheet_name, date_col, text_col, sheet_name, html=(text_col == "content"))
 
     posts.sort(key=lambda p: p["date"])
 
