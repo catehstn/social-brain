@@ -854,14 +854,14 @@ class TestCollectGoatcounter:
 
     def _mock_all(self, respx_mock, hits=None, total=None):
         respx_mock.get(f"{self.BASE}/stats/total").mock(
-            return_value=httpx.Response(200, json=total or {"total": 1500, "total_unique": 900})
+            return_value=httpx.Response(200, json=total or {"total": 1500, "total_events": 200})
         )
         respx_mock.get(f"{self.BASE}/stats/hits").mock(
             return_value=httpx.Response(200, json={"hits": hits or [
-                {"path": "/", "count": 1300},
-                {"path": "/about", "count": 200},
-                {"path": "result/trike", "count": 120},
-                {"path": "result/mpr", "count": 80},
+                {"path": "/", "event": False, "count": 1300},
+                {"path": "/about", "event": False, "count": 200},
+                {"path": "result/trike", "event": True, "count": 120},
+                {"path": "result/mpr", "event": True, "count": 80},
             ]})
         )
 
@@ -870,8 +870,8 @@ class TestCollectGoatcounter:
         result = collect_goatcounter("what-raccoon", "token", since=SINCE)
         assert result is not None
         assert result["platform"] == "goatcounter"
-        assert result["total_pageviews"] == 1500
-        assert result["total_unique"] == 900
+        assert result["total_visitors"] == 1500
+        assert result["total_events"] == 200
 
     def test_page_paths_in_top_paths(self, respx_mock):
         self._mock_all(respx_mock)
@@ -894,7 +894,7 @@ class TestCollectGoatcounter:
         assert not any(p.startswith("result/") for p in paths)
 
     def test_no_events_returns_empty_list(self, respx_mock):
-        self._mock_all(respx_mock, hits=[{"path": "/", "count": 500}])
+        self._mock_all(respx_mock, hits=[{"path": "/", "event": False, "count": 500}])
         result = collect_goatcounter("what-raccoon", "token", since=SINCE)
         assert result["events"] == []
 
