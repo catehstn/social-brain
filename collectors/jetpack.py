@@ -30,7 +30,9 @@ def _reauth_jetpack(client_id: str, client_secret: str, username: str, password:
             },
             timeout=30,
         )
-        r.raise_for_status()
+        if not r.is_success:
+            logger.error("Jetpack re-auth failed: HTTP %s — %s", r.status_code, r.text[:300])
+            return None
         token = r.json().get("access_token")
         if token:
             logger.info("Jetpack: re-auth succeeded, saving new token to config.yaml")
