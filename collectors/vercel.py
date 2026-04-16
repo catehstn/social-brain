@@ -50,7 +50,7 @@ def collect_vercel(
             ts_r.raise_for_status()
             timeseries = ts_r.json()
 
-            pages_r = client.get(f"{base}/stats", params={**common_params, "type": "path", "limit": 20})
+            pages_r = client.get(f"{base}/stats", params={**common_params, "type": "path", "limit": 50})
             pages_r.raise_for_status()
             pages_data = pages_r.json()
 
