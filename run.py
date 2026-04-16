@@ -519,7 +519,17 @@ def main() -> None:
                 "Collected data from: %s", ", ".join(collected.keys())
             )
 
-        save_raw(collected, label)
+        if args.platform:
+            # Single-platform run: save to a dedicated file so the weekly
+            # snapshot isn't overwritten with partial data.
+            platform_dir = ROOT / "data" / "platform"
+            platform_dir.mkdir(parents=True, exist_ok=True)
+            platform_path = platform_dir / f"{args.platform}-latest.json"
+            with platform_path.open("w") as f:
+                json.dump(collected, f, indent=2, default=str)
+            logger.info("Platform data saved → %s", platform_path)
+        else:
+            save_raw(collected, label)
 
         # ------------------------------------------------------------------
         # Persistent store — upsert into analytics.xlsx
@@ -557,6 +567,16 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.analyse_only:
         collected, label = load_latest_raw()
+    elif args.platform:
+        # Single-platform run: load the full weekly snapshot (if it exists)
+        # and merge in the freshly collected data so the prompt is complete.
+        platform_dir = ROOT / "data" / "platform"
+        snapshots = sorted(DATA_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if snapshots:
+            with snapshots[0].open() as f:
+                full = json.load(f)
+            full.update(collected)
+            collected = full
 
     if not collected:
         logger.warning(
