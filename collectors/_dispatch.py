@@ -84,7 +84,12 @@ def collect_all(
             if not jetpack_site or not jetpack_token:
                 logger.info("Jetpack: jetpack_site or jetpack_access_token not configured — skipping")
                 return
-            data = collect_jetpack(jetpack_site, jetpack_token, since=since)
+            data = collect_jetpack(
+                jetpack_site, jetpack_token, since=since,
+                client_id=config.get("jetpack_client_id", ""),
+                client_secret=config.get("jetpack_client_secret", ""),
+                username=config.get("jetpack_username", ""),
+            )
         elif name == "linkedin":
             data = collect_linkedin()
         elif name == "substack":

@@ -161,6 +161,8 @@ Your site must have Jetpack active with Stats enabled.
    ```
 3. Set `jetpack_access_token` and `jetpack_site` (e.g. `yourdomain.com`) in `config.yaml`
 
+**Automatic token refresh (recommended):** If the token expires you'll get a 403. To handle this automatically, also set `jetpack_client_id`, `jetpack_client_secret`, and `jetpack_username` in `config.yaml`. When a 403 is detected, the script will prompt for your WordPress.com password at the terminal (never stored), re-auth, save the new token, and retry — no manual curl needed.
+
 Collects: daily page views, top posts, referrer sources, email subscriber count, WordPress.com follower count, and scheduled future posts.
 
 **Google Search Console**

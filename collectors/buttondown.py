@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from collectors._helpers import _utcnow, _iso
+from collectors._helpers import _utcnow, _iso, _default_since
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,12 @@ def _collect_buttondown_newsletter(
     newsletter_key: str,
     since: datetime | None,
     use_since: bool,
-) -> tuple[list[dict], int | None]:
-    """Collect emails and subscriber count for a single Buttondown newsletter."""
+) -> tuple[list[dict], int | None, dict[str, int], dict[str, int]]:
+    """Collect emails and subscriber data for a single Buttondown newsletter.
+
+    Returns (emails, total_subscriber_count, tag_totals, tag_new_since).
+    tag_totals and tag_new_since are empty dicts for newsletters with no tags.
+    """
     headers = {"Authorization": f"Token {newsletter_key}"}
     newsletters: list[dict] = []
     page = 1
@@ -80,15 +84,55 @@ def _collect_buttondown_newsletter(
             break
         page += 1
 
-    sr = client.get(
-        "https://api.buttondown.email/v1/subscribers",
-        params={"page_size": 1},
-        headers=headers,
-    )
-    sr.raise_for_status()
-    subscriber_count = sr.json().get("count", None)
+    # Check if this newsletter has any tags before paginating all subscribers
+    tags_r = client.get("https://api.buttondown.email/v1/tags", headers=headers)
+    tags_r.raise_for_status()
+    has_tags = tags_r.json().get("count", 0) > 0
 
-    return newsletters, subscriber_count
+    tag_totals: dict[str, int] = {}
+    tag_new: dict[str, int] = {}
+    subscriber_count: int | None = None
+
+    if has_tags:
+        # Paginate all subscribers and count by tag client-side
+        # (API tag filter doesn't work server-side)
+        sub_page = 1
+        while True:
+            sr = client.get(
+                "https://api.buttondown.email/v1/subscribers",
+                params={"page_size": 100, "page": sub_page},
+                headers=headers,
+            )
+            sr.raise_for_status()
+            sub_data = sr.json()
+            if subscriber_count is None:
+                subscriber_count = sub_data.get("count")
+            for sub in sub_data.get("results", []):
+                for tag in sub.get("tags", []):
+                    tag_totals[tag] = tag_totals.get(tag, 0) + 1
+                    count_since = since or _default_since()
+                    if sub.get("creation_date"):
+                        try:
+                            created = datetime.fromisoformat(
+                                sub["creation_date"].replace("Z", "+00:00")
+                            )
+                            if created >= count_since:
+                                tag_new[tag] = tag_new.get(tag, 0) + 1
+                        except ValueError:
+                            pass
+            if not sub_data.get("next"):
+                break
+            sub_page += 1
+    else:
+        sr = client.get(
+            "https://api.buttondown.email/v1/subscribers",
+            params={"page_size": 1},
+            headers=headers,
+        )
+        sr.raise_for_status()
+        subscriber_count = sr.json().get("count", None)
+
+    return newsletters, subscriber_count, tag_totals, tag_new
 
 
 def collect_buttondown(
@@ -106,6 +150,8 @@ def collect_buttondown(
     try:
         all_newsletters: list[dict] = []
         subscriber_counts: dict[str, int] = {}
+        tag_counts: dict[str, dict[str, int]] = {}
+        tag_new_counts: dict[str, dict[str, int]] = {}
 
         with httpx.Client(timeout=30) as client:
             # Discover all newsletters on the account
@@ -120,15 +166,19 @@ def collect_buttondown(
                 nl_name = nl.get("name", nl.get("domain", nl["id"]))
                 nl_key = nl.get("api_key", api_key)
                 try:
-                    emails, count = _collect_buttondown_newsletter(
+                    emails, count, tag_totals, tag_new = _collect_buttondown_newsletter(
                         client, nl_name, nl_key, since, use_since
                     )
                     all_newsletters.extend(emails)
                     if count is not None:
                         subscriber_counts[nl_name] = count
+                    if tag_totals:
+                        tag_counts[nl_name] = tag_totals
+                    if tag_new:
+                        tag_new_counts[nl_name] = tag_new
                     logger.info(
-                        "Buttondown [%s]: %d newsletters, %s subscribers",
-                        nl_name, len(emails), count,
+                        "Buttondown [%s]: %d emails, %s subscribers, %d tags",
+                        nl_name, len(emails), count, len(tag_totals),
                     )
                 except Exception as exc:
                     logger.warning("Buttondown [%s] failed: %s", nl_name, exc)
@@ -142,6 +192,10 @@ def collect_buttondown(
             "subscriber_counts": subscriber_counts,
             "newsletters": all_newsletters,
         }
+        if tag_counts:
+            result["subscriber_tags"] = tag_counts
+        if tag_new_counts:
+            result["new_subscribers_by_tag"] = tag_new_counts
         if use_since:
             result["since"] = _iso(since)
         return result

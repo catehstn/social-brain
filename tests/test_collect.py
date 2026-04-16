@@ -241,6 +241,8 @@ class TestCollectBluesky:
 # ---------------------------------------------------------------------------
 
 class TestCollectButtondown:
+    NO_TAGS = httpx.Response(200, json={"results": [], "count": 0, "next": None})
+
     def _newsletter(self, nl_id: str = "nl1", name: str = "my-newsletter", api_key: str = "key123") -> dict:
         return {"id": nl_id, "name": name, "api_key": api_key}
 
@@ -260,6 +262,7 @@ class TestCollectButtondown:
                 "results": [self._email("e1", "Issue 1", RECENT)], "next": None,
             })
         )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
         respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
             return_value=httpx.Response(200, json={"count": 520})
         )
@@ -278,6 +281,7 @@ class TestCollectButtondown:
                 "results": [self._email("e1", "Issue 1", RECENT)], "next": None,
             })
         )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
         respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
             return_value=httpx.Response(200, json={"count": 500})
         )
@@ -293,6 +297,7 @@ class TestCollectButtondown:
         respx_mock.get("https://api.buttondown.email/v1/emails").mock(
             return_value=httpx.Response(200, json={"results": [], "next": None})
         )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
         respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
             return_value=httpx.Response(200, json={"count": 750})
         )
@@ -327,12 +332,51 @@ class TestCollectButtondown:
                 "next": None,
             })
         )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
         respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
             return_value=httpx.Response(200, json={"count": 500})
         )
         result = collect_buttondown("apikey", since=SINCE)
         assert len(result["newsletters"]) == 1
         assert result["newsletters"][0]["id"] == "e1"
+
+    def test_tag_counts_returned_when_tags_exist(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [], "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(
+            return_value=httpx.Response(200, json={"results": [{"name": "cohort-1"}], "count": 1})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={
+                "count": 2, "next": None, "results": [
+                    {"tags": ["cohort-1"], "creation_date": RECENT},
+                    {"tags": ["cohort-1"], "creation_date": OLD},
+                ]
+            })
+        )
+        result = collect_buttondown("apikey", since=SINCE)
+        assert result["subscriber_tags"]["my-newsletter"] == {"cohort-1": 2}
+        # Only RECENT subscriber is within since window
+        assert result["new_subscribers_by_tag"]["my-newsletter"] == {"cohort-1": 1}
+
+    def test_no_tags_omits_tag_fields(self, respx_mock):
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [], "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 100})
+        )
+        result = collect_buttondown("apikey", since=SINCE)
+        assert "subscriber_tags" not in result
+        assert "new_subscribers_by_tag" not in result
 
 
 # ---------------------------------------------------------------------------
