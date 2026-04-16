@@ -34,9 +34,13 @@ def _reauth_jetpack(client_id: str, client_secret: str, username: str, password:
         if not r.is_success:
             logger.error("Jetpack re-auth failed: HTTP %s — %s", r.status_code, r.text[:300])
             return None
-        token = r.json().get("access_token")
+        resp = r.json()
+        token = resp.get("access_token")
         if token:
-            logger.info("Jetpack: re-auth succeeded, saving new token to config.yaml")
+            logger.info(
+                "Jetpack: re-auth succeeded (blog_id=%s blog_url=%s), saving new token to config.yaml",
+                resp.get("blog_id"), resp.get("blog_url"),
+            )
             _save_token_to_config(token)
         return token
     except Exception as exc:
@@ -90,6 +94,8 @@ def collect_jetpack(
                 f"{base}/visits",
                 params={"unit": "day", "quantity": quantity, "date": today.isoformat()},
             )
+            if not r.is_success:
+                logger.error("Jetpack stats/visits HTTP %s — %s", r.status_code, r.text[:300])
             r.raise_for_status()
             visits_data = r.json()
 
