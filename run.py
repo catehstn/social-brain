@@ -548,7 +548,8 @@ def main() -> None:
 
         if args.collect_only:
             from collectors import PLATFORM_COLLECTORS
-            _print_run_summary(collected, list(PLATFORM_COLLECTORS.keys()), config)
+            summary_platforms = [args.platform] if args.platform else list(PLATFORM_COLLECTORS.keys())
+            _print_run_summary(collected, summary_platforms, config)
             return
 
     # ------------------------------------------------------------------
@@ -566,8 +567,9 @@ def main() -> None:
     from analyse import save_prompt
     from collectors import PLATFORM_COLLECTORS
 
+    summary_platforms = [args.platform] if args.platform else list(PLATFORM_COLLECTORS.keys())
     prompt_path = save_prompt(collected, config, period=label, reports_dir=REPORTS_DIR, months=args.months, update=args.update)
-    _print_run_summary(collected, list(PLATFORM_COLLECTORS.keys()), config, prompt_path=prompt_path, update=args.update)
+    _print_run_summary(collected, summary_platforms, config, prompt_path=prompt_path, update=args.update)
 
 
 if __name__ == "__main__":
