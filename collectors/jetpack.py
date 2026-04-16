@@ -27,6 +27,7 @@ def _reauth_jetpack(client_id: str, client_secret: str, username: str, password:
                 "grant_type": "password",
                 "username": username,
                 "password": password,
+                "scope": "global",
             },
             timeout=30,
         )

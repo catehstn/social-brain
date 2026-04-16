@@ -157,7 +157,8 @@ Your site must have Jetpack active with Stats enabled.
      -d "client_secret=YOUR_CLIENT_SECRET" \
      -d "grant_type=password" \
      -d "username=YOUR_WP_USERNAME" \
-     -d "password=YOUR_WP_PASSWORD"
+     -d "password=YOUR_WP_PASSWORD" \
+     -d "scope=global"
    ```
 3. Set `jetpack_access_token` and `jetpack_site` (e.g. `yourdomain.com`) in `config.yaml`
 
