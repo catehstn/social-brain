@@ -90,6 +90,8 @@ def collect_all(
                 client_secret=config.get("jetpack_client_secret", ""),
                 username=config.get("jetpack_username", ""),
             )
+            if data and "new_access_token" in data:
+                config["jetpack_access_token"] = data.pop("new_access_token")
         elif name == "linkedin":
             data = collect_linkedin()
         elif name == "substack":

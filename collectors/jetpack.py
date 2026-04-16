@@ -190,7 +190,10 @@ def collect_jetpack(
             new_token = _reauth_jetpack(client_id, client_secret, username, password)
             if new_token:
                 try:
-                    return _fetch(new_token)
+                    result = _fetch(new_token)
+                    if result is not None:
+                        result["new_access_token"] = new_token
+                    return result
                 except Exception as retry_exc:
                     logger.error("Jetpack collection failed after re-auth: %s", retry_exc)
                     return None
