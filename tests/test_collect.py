@@ -304,13 +304,21 @@ class TestCollectButtondown:
         result = collect_buttondown("apikey", since=SINCE)
         assert result["subscriber_counts"]["my-newsletter"] == 750
 
-    def test_no_newsletters_returns_empty_not_none(self, respx_mock):
+    def test_no_newsletters_falls_back_to_direct_collect(self, respx_mock):
+        """When /newsletters returns empty, collect directly using the provided key."""
         respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
             return_value=httpx.Response(200, json={"results": []})
         )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [], "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 42})
+        )
         result = collect_buttondown("apikey", since=SINCE)
         assert result is not None
-        assert result["newsletters"] == []
+        assert result["subscriber_counts"]["default"] == 42
 
     def test_api_error_returns_none(self, respx_mock):
         respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
