@@ -556,7 +556,7 @@ def main() -> None:
             else:
                 store_update(collected)
 
-        if args.collect_only:
+        if args.collect_only or args.platform:
             from collectors import PLATFORM_COLLECTORS
             summary_platforms = [args.platform] if args.platform else list(PLATFORM_COLLECTORS.keys())
             _print_run_summary(collected, summary_platforms, config)
@@ -567,16 +567,6 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.analyse_only:
         collected, label = load_latest_raw()
-    elif args.platform:
-        # Single-platform run: load the full weekly snapshot (if it exists)
-        # and merge in the freshly collected data so the prompt is complete.
-        platform_dir = ROOT / "data" / "platform"
-        snapshots = sorted(DATA_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if snapshots:
-            with snapshots[0].open() as f:
-                full = json.load(f)
-            full.update(collected)
-            collected = full
 
     if not collected:
         logger.warning(
