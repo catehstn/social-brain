@@ -142,8 +142,12 @@ def _parse_linkedin_xlsx(path: Path) -> dict[str, Any]:
             post_texts[post_url] = text
             logger.debug("LinkedIn post text fetched: %s chars", len(text) if text else 0)
 
+        # Build impressions lookup from the right-side table
+        impressions_by_url = {p["url"]: p["impressions"] for p in top_by_impressions}
+
         for p in top_by_engagement:
             p["text"] = post_texts.get(p["url"])
+            p["impressions"] = impressions_by_url.get(p["url"])
         for p in top_by_impressions:
             p["text"] = post_texts.get(p["url"])
 
