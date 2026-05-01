@@ -29,6 +29,9 @@ def _scrape_amazon_asin(client: httpx.Client, asin: str, marketplace: str) -> di
     r.raise_for_status()
     html = r.text
 
+    if "captcha" in html.lower() or 'id="captchacharacters"' in html:
+        raise ValueError(f"Bot/CAPTCHA page returned by {marketplace}")
+
     title_m = re.search(r'id="productTitle"[^>]*>\s*([^<]+)', html)
     title = title_m.group(1).strip() if title_m else None
 
@@ -85,7 +88,10 @@ def collect_amazon(
     with httpx.Client(timeout=30, headers=_AMAZON_HEADERS) as client:
         for marketplace in marketplaces:
             books = []
+            blocked = False
             for i, asin in enumerate(asins):
+                if blocked:
+                    break
                 if i > 0:
                     time.sleep(1)
                 try:
@@ -97,6 +103,12 @@ def collect_amazon(
                         book["rating"], book["reviews"],
                         book["title"] or "(no title)",
                     )
+                except ValueError as exc:
+                    if "CAPTCHA" in str(exc) or "Bot" in str(exc):
+                        logger.warning("Amazon [%s]: bot detection triggered — skipping marketplace", marketplace)
+                        blocked = True
+                    else:
+                        logger.warning("Amazon [%s/%s] failed: %s", marketplace, asin, exc)
                 except Exception as exc:
                     logger.warning("Amazon [%s/%s] failed: %s", marketplace, asin, exc)
             if books:
