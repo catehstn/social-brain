@@ -519,7 +519,15 @@ def main() -> None:
                 "Collected data from: %s", ", ".join(collected.keys())
             )
 
-        save_raw(collected, label)
+        if args.platform:
+            platform_dir = ROOT / "data" / "platform"
+            platform_dir.mkdir(parents=True, exist_ok=True)
+            platform_path = platform_dir / f"{args.platform}-latest.json"
+            with platform_path.open("w") as f:
+                json.dump(collected, f, indent=2, default=str)
+            logger.info("Platform data saved → %s", platform_path)
+        else:
+            save_raw(collected, label)
 
         # ------------------------------------------------------------------
         # Persistent store — upsert into analytics.xlsx
@@ -546,9 +554,10 @@ def main() -> None:
             else:
                 store_update(collected)
 
-        if args.collect_only:
+        if args.collect_only or args.platform:
             from collectors import PLATFORM_COLLECTORS
-            _print_run_summary(collected, list(PLATFORM_COLLECTORS.keys()), config)
+            summary_platforms = [args.platform] if args.platform else list(PLATFORM_COLLECTORS.keys())
+            _print_run_summary(collected, summary_platforms, config)
             return
 
     # ------------------------------------------------------------------

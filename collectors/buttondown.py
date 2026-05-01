@@ -162,8 +162,11 @@ def collect_buttondown(
             r.raise_for_status()
             account_newsletters = r.json().get("results", [])
 
+            if not account_newsletters:
+                account_newsletters = [{"name": "default", "api_key": api_key}]
+
             for nl in account_newsletters:
-                nl_name = nl.get("name", nl.get("domain", nl["id"]))
+                nl_name = nl.get("name") or nl.get("domain") or nl.get("id", "default")
                 nl_key = nl.get("api_key", api_key)
                 try:
                     emails, count, tag_totals, tag_new = _collect_buttondown_newsletter(
