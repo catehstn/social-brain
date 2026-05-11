@@ -116,7 +116,28 @@ Your project must have Web Analytics enabled. You need at least Member access on
 
 **LinkedIn**
 
-LinkedIn doesn't offer an analytics API for individual creators.
+Two options — use whichever suits you:
+
+**Option A: API (EU/EEA/Switzerland only) — recommended**
+
+Uses LinkedIn's Member Data Portability API (`r_dma_portability_self_serve` scope). Fully automatic once set up; no manual CSV export needed.
+
+1. Create a LinkedIn Developer App at [linkedin.com/developers](https://www.linkedin.com/developers/)
+2. Add `http://localhost:8976/callback` as a redirect URL under **Auth → OAuth 2.0 settings**
+3. Apply for the **Member Data Portability** product (DMA access) — approval may take a few days
+4. Add your Client ID and Client Secret to `config.yaml`:
+   ```yaml
+   linkedin_client_id: YOUR_CLIENT_ID
+   linkedin_client_secret: YOUR_CLIENT_SECRET
+   ```
+5. Run the OAuth flow (opens your browser, saves token automatically):
+   ```bash
+   python run.py --auth linkedin
+   ```
+
+Tokens are valid for ~60 days. Re-run `--auth linkedin` when the token expires.
+
+**Option B: Manual CSV export (all regions)**
 
 1. LinkedIn profile → Analytics → Posts → Export → download CSV/XLSX
 2. Move the file into `linkedin_drops/`
@@ -209,6 +230,7 @@ python run.py --analyse-only --months 3  # same, with 3-month label in filename
 python run.py --platform mastodon  # single platform
 python run.py --update             # collect + build a compact update prompt
 python run.py --analyse-only --update  # update prompt from last saved data
+python run.py --auth linkedin      # (EU only) OAuth flow to get a LinkedIn API token
 ```
 
 ### First run

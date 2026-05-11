@@ -27,6 +27,7 @@ from collect import (
     collect_vercel,
     collect_all,
 )
+from collectors.linkedin_api import collect_linkedin_api
 
 SINCE = datetime(2026, 2, 20, tzinfo=timezone.utc)
 RECENT = "2026-03-01T10:00:00Z"
@@ -1194,6 +1195,198 @@ class TestCollectMentions:
 
 
 # ---------------------------------------------------------------------------
+# LinkedIn API collector
+# ---------------------------------------------------------------------------
+
+_LI_BASE = "https://api.linkedin.com"
+
+
+def _li_post_element(
+    urn: str = "urn:li:share:1",
+    text: str = "Hello LinkedIn",
+    created_ms: int = 1_775_000_000_000,  # ~2026-03-29 (after SINCE=2026-02-20)
+    permalink: str | None = None,
+) -> dict:
+    return {
+        "urn": urn,
+        "snapshotData": {
+            "urn": urn,
+            "commentary": text,
+            "created": {"time": created_ms},
+            "permalink": permalink or f"https://www.linkedin.com/posts/{urn.split(':')[-1]}",
+        },
+    }
+
+
+def _li_analytics_element(metric_type: str, value: int) -> dict:
+    return {"type": metric_type, "value": value}
+
+
+class TestCollectLinkedinApi:
+    def test_no_token_returns_none(self):
+        result = collect_linkedin_api("")
+        assert result is None
+
+    def test_happy_path_returns_data(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                _li_analytics_element("IMPRESSION", 500),
+                _li_analytics_element("REACTION", 10),
+                _li_analytics_element("COMMENT", 3),
+                _li_analytics_element("RESHARE", 2),
+                _li_analytics_element("LINK_CLICK", 20),
+                _li_analytics_element("MEMBERS_REACHED", 400),
+            ]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "linkedin"
+        assert result["source"] == "api"
+        assert len(result["posts"]) == 1
+        post = result["posts"][0]
+        assert post["text"] == "Hello LinkedIn"
+        assert post["impressions"] == 500
+        assert post["reactions"] == 10
+        assert post["comments"] == 3
+        assert post["shares"] == 2
+        assert post["clicks"] == 20
+        assert post["members_reached"] == 400
+
+    def test_summary_totals_computed(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                _li_analytics_element("IMPRESSION", 300),
+                _li_analytics_element("REACTION", 5),
+            ]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result["summary"]["total_impressions"] == 300
+        assert result["summary"]["total_reactions"] == 5
+        assert result["summary"]["post_count"] == 1
+
+    def test_posts_before_since_excluded(self, respx_mock):
+        # created_ms for 2024-01-01 — well before SINCE (2026-02-20)
+        old_ms = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                _li_post_element(urn="urn:li:share:1", created_ms=int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp() * 1000)),
+                _li_post_element(urn="urn:li:share:2", created_ms=old_ms),
+            ]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["urn"] == "urn:li:share:1"
+
+    def test_pagination_followed(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            side_effect=[
+                httpx.Response(200, json={"elements": [_li_post_element("urn:li:share:1")] * 50}),
+                httpx.Response(200, json={"elements": [_li_post_element("urn:li:share:2")]}),
+                httpx.Response(200, json={"elements": []}),
+            ]
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert len(result["posts"]) == 51  # 50 + 1 from second page
+
+    def test_401_returns_none(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(401, json={"message": "Unauthorized"})
+        )
+        result = collect_linkedin_api("bad_token", since=SINCE)
+        assert result is None
+
+    def test_403_returns_none(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(403, json={"message": "Forbidden"})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is None
+
+    def test_network_error_returns_none(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            side_effect=httpx.ConnectError("connection failed")
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is None
+
+    def test_analytics_failure_for_one_post_still_returns_post(self, respx_mock):
+        """If per-post analytics fail, the post is still included with zero metrics."""
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(429, json={"message": "Rate limit exceeded"})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["impressions"] == 0
+
+    def test_changelogs_included_in_result(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                {"type": "SHARE_CREATE", "timestamp": 1_740_000_000_000},
+            ]})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert len(result["changelogs"]) == 1
+
+    def test_changelogs_failure_does_not_crash(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            side_effect=httpx.ConnectError("failed")
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert result["changelogs"] == []
+
+    def test_empty_posts_returns_valid_result(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert result["posts"] == []
+        assert result["summary"]["post_count"] == 0
+
+
+# ---------------------------------------------------------------------------
 # collect_all
 # ---------------------------------------------------------------------------
 
@@ -1254,6 +1447,51 @@ class TestCollectAll:
         }
         collect_all(config, platform="mastodon", since=SINCE)
         assert called == ["mastodon"]
+
+    def test_linkedin_api_used_when_token_configured(self, monkeypatch):
+        """When linkedin_access_token is set, collect_linkedin_api is called instead of collect_linkedin."""
+        api_called = []
+        file_called = []
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin_api",
+            lambda tok, **kw: api_called.append(tok) or {"platform": "linkedin", "posts": []},
+        )
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin",
+            lambda **kw: file_called.append(True) or {"platform": "linkedin", "posts": []},
+        )
+        config = {"linkedin_access_token": "my_token"}
+        result = collect_all(config, platform="linkedin", since=SINCE)
+        assert api_called == ["my_token"]
+        assert file_called == []
+        assert "linkedin" in result
+
+    def test_linkedin_file_drop_used_when_no_token(self, monkeypatch):
+        """When linkedin_access_token is absent, collect_linkedin (file-drop) is called."""
+        api_called = []
+        file_called = []
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin_api",
+            lambda tok, **kw: api_called.append(tok) or {"platform": "linkedin", "posts": []},
+        )
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin",
+            lambda **kw: file_called.append(True) or {"platform": "linkedin", "posts": []},
+        )
+        config = {}
+        collect_all(config, platform="linkedin", since=SINCE)
+        assert api_called == []
+        assert file_called == [True]
+
+    def test_linkedin_api_none_result_absent_from_results(self, monkeypatch):
+        """If collect_linkedin_api returns None, linkedin is absent from results."""
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin_api",
+            lambda tok, **kw: None,
+        )
+        config = {"linkedin_access_token": "tok"}
+        result = collect_all(config, platform="linkedin", since=SINCE)
+        assert "linkedin" not in result
 
 
 # ---------------------------------------------------------------------------

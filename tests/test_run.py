@@ -649,6 +649,29 @@ class TestCheckDropStaleness:
         warnings = run.check_drop_staleness()
         assert any("my_export.csv" in w for w in warnings)
 
+    def test_linkedin_staleness_suppressed_when_api_token_set(self, tmp_path, monkeypatch):
+        """When linkedin_access_token is set, stale file-drop warning is suppressed."""
+        monkeypatch.chdir(tmp_path)
+        export = tmp_path / "linkedin_drops" / "export.csv"
+        self._write_csv(export)
+        stale = time.time() - 25 * 3600
+        import os
+        os.utime(export, (stale, stale))
+        config = {"linkedin_access_token": "some_token"}
+        warnings = run.check_drop_staleness(config)
+        assert not any("LinkedIn" in w for w in warnings)
+
+    def test_linkedin_staleness_shown_without_api_token(self, tmp_path, monkeypatch):
+        """Without linkedin_access_token, stale file-drop warning still appears."""
+        monkeypatch.chdir(tmp_path)
+        export = tmp_path / "linkedin_drops" / "export.csv"
+        self._write_csv(export)
+        stale = time.time() - 25 * 3600
+        import os
+        os.utime(export, (stale, stale))
+        warnings = run.check_drop_staleness({})
+        assert any("LinkedIn" in w for w in warnings)
+
 
 class TestNonInteractiveStaleness:
     """Stale-check behaviour when stdin is not a TTY (e.g. agent runs)."""
@@ -718,3 +741,109 @@ class TestNonInteractiveStaleness:
             }):
                 run.main()
         mock_collect.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# --auth linkedin
+# ---------------------------------------------------------------------------
+
+class TestAuthSubcommand:
+    def _setup(self, tmp_path: Path, monkeypatch, extra_config: dict | None = None) -> Path:
+        config_path = tmp_path / "config.yaml"
+        cfg = {
+            "mastodon_instance": "hachyderm.io",
+            "mastodon_handle": "cate",
+            "bluesky_handle": "catehstn.bsky.social",
+            "buttondown_api_key": "key",
+            "jetpack_site": "cate.blog",
+            "jetpack_access_token": "token",
+            "linkedin_client_id": "client123",
+            "linkedin_client_secret": "secret456",
+            **(extra_config or {}),
+        }
+        _write_config(config_path, cfg)
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        return config_path
+
+    def test_auth_linkedin_mutually_exclusive_with_collect_only(self, monkeypatch):
+        """--auth and --collect-only cannot be combined."""
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin", "--collect-only"])
+        with pytest.raises(SystemExit) as exc:
+            run.parse_args()
+        assert exc.value.code != 0
+
+    def test_auth_linkedin_mutually_exclusive_with_analyse_only(self, monkeypatch):
+        """--auth and --analyse-only cannot be combined."""
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin", "--analyse-only"])
+        with pytest.raises(SystemExit) as exc:
+            run.parse_args()
+        assert exc.value.code != 0
+
+    def test_missing_client_id_exits(self, tmp_path, monkeypatch):
+        """Missing linkedin_client_id exits with error."""
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, {
+            **_minimal_config(),
+            "linkedin_client_secret": "secret",
+        })
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+        with pytest.raises(SystemExit) as exc:
+            run.main()
+        assert exc.value.code == 1
+
+    def test_missing_client_secret_exits(self, tmp_path, monkeypatch):
+        """Missing linkedin_client_secret exits with error."""
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, {
+            **_minimal_config(),
+            "linkedin_client_id": "client123",
+        })
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+        with pytest.raises(SystemExit) as exc:
+            run.main()
+        assert exc.value.code == 1
+
+    def test_successful_oauth_writes_token_to_config(self, tmp_path, monkeypatch):
+        """Successful OAuth flow writes linkedin_access_token to config.yaml."""
+        config_path = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+
+        import threading
+
+        def fake_oauth(config: dict) -> None:
+            # Simulate a successful OAuth by writing the token directly
+            raw = config_path.read_text()
+            config_path.write_text(raw + "\nlinkedin_access_token: new_token_xyz\n")
+
+        monkeypatch.setattr(run, "_linkedin_oauth", fake_oauth)
+        run.main()
+
+        written = config_path.read_text()
+        assert "linkedin_access_token" in written
+        assert "new_token_xyz" in written
+
+    def test_token_exchange_failure_exits(self, tmp_path, monkeypatch):
+        """If the OAuth helper raises SystemExit(1), main propagates it."""
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+
+        def failing_oauth(config: dict) -> None:
+            sys.exit(1)
+
+        monkeypatch.setattr(run, "_linkedin_oauth", failing_oauth)
+        with pytest.raises(SystemExit) as exc:
+            run.main()
+        assert exc.value.code == 1
+
+    def test_platform_expected_with_api_token(self, tmp_path, monkeypatch):
+        """_platform_expected returns True for linkedin when api token is set."""
+        monkeypatch.chdir(tmp_path)
+        config = {"linkedin_access_token": "tok"}
+        assert run._platform_expected("linkedin", config) is True
+
+    def test_platform_expected_without_token_and_no_files(self, tmp_path, monkeypatch):
+        """_platform_expected returns False when no token and no drop files."""
+        monkeypatch.chdir(tmp_path)
+        assert run._platform_expected("linkedin", {}) is False

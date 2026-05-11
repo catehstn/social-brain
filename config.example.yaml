@@ -72,6 +72,14 @@ vercel_team_id:                        # Team ID if the project is in a team (op
 # calendly_token: YOUR_CALENDLY_TOKEN
 # calendly_lead_gen_event: "30 Minute Coaching Intro"  # exact event name to surface as primary lead-gen metric
 
+# --- LinkedIn DMA API (EU/EEA/Switzerland only — optional, replaces manual CSV export) ---
+# Requires a LinkedIn Developer App with r_dma_portability_self_serve scope approved.
+# See README for full setup instructions.
+# After setup: python run.py --auth linkedin
+# linkedin_client_id: YOUR_LINKEDIN_CLIENT_ID
+# linkedin_client_secret: YOUR_LINKEDIN_CLIENT_SECRET
+# linkedin_access_token:   # written automatically by --auth linkedin (valid ~60 days)
+
 # --- Content strategy ---
 # primary_focus: the metric or outcome you care about most. Claude uses this to frame
 # the analysis and recommend data sources that would help measure it better.
