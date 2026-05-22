@@ -635,8 +635,7 @@ class TestNonInteractiveStaleness:
             run.main()  # must not sys.exit()
         mock_collect.assert_called_once()
 
-    def test_interactive_stale_aborts_on_no(self, tmp_path, monkeypatch):
-        """When stdin is a TTY and user answers N, run aborts."""
+    def _setup_interactive(self, tmp_path: Path, monkeypatch) -> None:
         self._write_stale_linkedin(tmp_path, monkeypatch)
         config_path = tmp_path / "config.yaml"
         data_dir = tmp_path / "data" / "weekly"
@@ -646,12 +645,28 @@ class TestNonInteractiveStaleness:
         monkeypatch.setattr(run, "DATA_DIR", data_dir)
         monkeypatch.setattr(run, "REPORTS_DIR", tmp_path / "reports")
         monkeypatch.setattr(sys, "argv", ["run.py", "--collect-only"])
-
-        import io
-        fake_stdin = io.StringIO("n\n")
-        fake_stdin.isatty = lambda: True  # type: ignore[attr-defined]
+        fake_stdin = MagicMock()
+        fake_stdin.isatty.return_value = True
         monkeypatch.setattr(sys, "stdin", fake_stdin)
+
+    def test_interactive_stale_aborts_on_no(self, tmp_path, monkeypatch):
+        """When stdin is a TTY and user answers N, run aborts."""
+        self._setup_interactive(tmp_path, monkeypatch)
         with patch("builtins.input", return_value="n"):
             with pytest.raises(SystemExit) as exc:
                 run.main()
         assert exc.value.code == 0
+
+    def test_interactive_stale_continues_on_yes(self, tmp_path, monkeypatch):
+        """When stdin is a TTY and user answers y, run continues."""
+        self._setup_interactive(tmp_path, monkeypatch)
+        mock_collect = MagicMock(return_value={})
+        with patch("builtins.input", return_value="y"):
+            with patch.dict("sys.modules", {
+                "collect": MagicMock(collect_all=mock_collect),
+                "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()),
+                                   STORE_PATH=tmp_path / "analytics.xlsx"),
+                "analyse": MagicMock(save_prompt=MagicMock()),
+            }):
+                run.main()
+        mock_collect.assert_called_once()
