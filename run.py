@@ -493,13 +493,16 @@ def main() -> None:
             print("\nWarning: stale data detected:")
             for w in stale:
                 print(f"  • {w}")
-            try:
-                answer = input("\nContinue anyway? [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                answer = ""
-            if answer != "y":
-                logger.info("Aborted by user.")
-                sys.exit(0)
+            if not sys.stdin.isatty():
+                logger.warning("Running non-interactively — continuing despite stale data.")
+            else:
+                try:
+                    answer = input("\nContinue anyway? [y/N] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    answer = ""
+                if answer != "y":
+                    logger.info("Aborted by user.")
+                    sys.exit(0)
 
     # ------------------------------------------------------------------
     # Collection

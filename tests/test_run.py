@@ -600,3 +600,73 @@ class TestCheckDropStaleness:
         os.utime(export, (stale, stale))
         warnings = run.check_drop_staleness()
         assert any("my_export.csv" in w for w in warnings)
+
+
+class TestNonInteractiveStaleness:
+    """Stale-check behaviour when stdin is not a TTY (e.g. agent runs)."""
+
+    def _write_stale_linkedin(self, tmp_path: Path, monkeypatch) -> None:
+        import os
+        drop = tmp_path / "linkedin_drops" / "export.csv"
+        drop.parent.mkdir(parents=True, exist_ok=True)
+        drop.write_text("col\nval\n")
+        os.utime(drop, (time.time() - 25 * 3600,) * 2)
+        monkeypatch.chdir(tmp_path)
+
+    def test_non_interactive_continues_despite_stale(self, tmp_path, monkeypatch):
+        """When stdin is not a TTY, stale warning is logged but run continues."""
+        self._write_stale_linkedin(tmp_path, monkeypatch)
+        config_path = tmp_path / "config.yaml"
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        _write_config(config_path, _minimal_config())
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        monkeypatch.setattr(run, "REPORTS_DIR", tmp_path / "reports")
+        monkeypatch.setattr(sys, "argv", ["run.py", "--collect-only"])
+        # stdin.isatty() returns False in pytest — no prompt, no exit
+        mock_collect = MagicMock(return_value={})
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()),
+                               STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()  # must not sys.exit()
+        mock_collect.assert_called_once()
+
+    def _setup_interactive(self, tmp_path: Path, monkeypatch) -> None:
+        self._write_stale_linkedin(tmp_path, monkeypatch)
+        config_path = tmp_path / "config.yaml"
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        _write_config(config_path, _minimal_config())
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        monkeypatch.setattr(run, "REPORTS_DIR", tmp_path / "reports")
+        monkeypatch.setattr(sys, "argv", ["run.py", "--collect-only"])
+        fake_stdin = MagicMock()
+        fake_stdin.isatty.return_value = True
+        monkeypatch.setattr(sys, "stdin", fake_stdin)
+
+    def test_interactive_stale_aborts_on_no(self, tmp_path, monkeypatch):
+        """When stdin is a TTY and user answers N, run aborts."""
+        self._setup_interactive(tmp_path, monkeypatch)
+        with patch("builtins.input", return_value="n"):
+            with pytest.raises(SystemExit) as exc:
+                run.main()
+        assert exc.value.code == 0
+
+    def test_interactive_stale_continues_on_yes(self, tmp_path, monkeypatch):
+        """When stdin is a TTY and user answers y, run continues."""
+        self._setup_interactive(tmp_path, monkeypatch)
+        mock_collect = MagicMock(return_value={})
+        with patch("builtins.input", return_value="y"):
+            with patch.dict("sys.modules", {
+                "collect": MagicMock(collect_all=mock_collect),
+                "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()),
+                                   STORE_PATH=tmp_path / "analytics.xlsx"),
+                "analyse": MagicMock(save_prompt=MagicMock()),
+            }):
+                run.main()
+        mock_collect.assert_called_once()
