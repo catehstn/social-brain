@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).parent
 CONFIG_PATH = ROOT / "config.yaml"
 DATA_DIR = ROOT / "data" / "weekly"
+PLATFORM_DIR = ROOT / "data" / "platform"
 REPORTS_DIR = ROOT / "reports"
 
 REQUIRED_CONFIG_KEYS = [
@@ -111,6 +112,16 @@ def save_raw(data: dict, label: str) -> Path:
         json.dump(data, f, indent=2, default=str)
     logger.info("Raw data saved → %s", path)
     return path
+
+
+def save_platform_latest(collected: dict) -> None:
+    """Write per-platform latest snapshots to data/platform/<name>-latest.json."""
+    PLATFORM_DIR.mkdir(parents=True, exist_ok=True)
+    for name, data in collected.items():
+        path = PLATFORM_DIR / f"{name}-latest.json"
+        with path.open("w") as f:
+            json.dump({name: data}, f, indent=2, default=str)
+    logger.info("Platform snapshots updated → %s", PLATFORM_DIR)
 
 
 def load_latest_raw() -> tuple[dict, str]:
@@ -523,6 +534,8 @@ def main() -> None:
             )
 
         save_raw(collected, label)
+        if collected:
+            save_platform_latest(collected)
 
         # ------------------------------------------------------------------
         # Persistent store — upsert into analytics.xlsx

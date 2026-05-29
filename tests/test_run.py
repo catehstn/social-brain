@@ -155,6 +155,54 @@ class TestSaveRaw:
 
 
 # ---------------------------------------------------------------------------
+# save_platform_latest
+# ---------------------------------------------------------------------------
+
+class TestSavePlatformLatest:
+    def test_creates_directory_if_absent(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        assert not platform_dir.exists()
+        run.save_platform_latest({"buttondown": {"collected_at": "2026-05-29"}})
+        assert platform_dir.exists()
+
+    def test_writes_one_file_per_platform(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        run.save_platform_latest({
+            "buttondown": {"collected_at": "2026-05-29"},
+            "mastodon": {"posts": []},
+        })
+        assert (platform_dir / "buttondown-latest.json").exists()
+        assert (platform_dir / "mastodon-latest.json").exists()
+
+    def test_file_wrapped_in_platform_key(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        run.save_platform_latest({"buttondown": {"collected_at": "2026-05-29", "newsletters": []}})
+        data = json.loads((platform_dir / "buttondown-latest.json").read_text())
+        assert "buttondown" in data
+        assert data["buttondown"]["collected_at"] == "2026-05-29"
+
+    def test_overwrites_existing_file(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        platform_dir.mkdir(parents=True)
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        old = platform_dir / "buttondown-latest.json"
+        old.write_text(json.dumps({"buttondown": {"collected_at": "2026-04-24"}}))
+        run.save_platform_latest({"buttondown": {"collected_at": "2026-05-29"}})
+        data = json.loads(old.read_text())
+        assert data["buttondown"]["collected_at"] == "2026-05-29"
+
+    def test_empty_collected_writes_nothing(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        run.save_platform_latest({})
+        assert platform_dir.exists()
+        assert list(platform_dir.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
 # load_latest_raw
 # ---------------------------------------------------------------------------
 
