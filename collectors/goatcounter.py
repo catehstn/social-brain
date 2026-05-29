@@ -37,17 +37,23 @@ def collect_goatcounter(
         with httpx.Client(timeout=30, headers=headers) as client:
             r = client.get(f"{base}/stats/total", params={"start": start, "end": end})
             if not r.is_success:
-                logger.error("GoatCounter stats/total failed: HTTP %s — %s", r.status_code, r.text[:300])
+                logger.error(
+                    "GoatCounter stats/total failed: HTTP %s — %s",
+                    r.status_code, r.text[:300],
+                )
                 return None
             total_data = r.json()
 
             r = client.get(f"{base}/stats/hits", params={"start": start, "end": end, "limit": 200})
             if not r.is_success:
-                logger.error("GoatCounter stats/hits failed: HTTP %s — %s", r.status_code, r.text[:300])
+                logger.error(
+                    "GoatCounter stats/hits failed: HTTP %s — %s",
+                    r.status_code, r.text[:300],
+                )
                 return None
             hits_data = r.json()
 
-        hits = hits_data.get("hits", [])
+        hits = hits_data.get("hits") or []
         top_paths = [
             {"path": h["path"], "count": h["count"]}
             for h in hits if not h.get("event", False)
@@ -67,6 +73,12 @@ def collect_goatcounter(
             "top_paths": top_paths,
             "events": events,
         }
+    except httpx.TimeoutException as exc:
+        logger.error("GoatCounter collection timed out (%s): %s", type(exc).__name__, exc)
+        return None
+    except httpx.HTTPError as exc:
+        logger.error("GoatCounter HTTP error (%s): %s", type(exc).__name__, exc)
+        return None
     except Exception as exc:
-        logger.error("GoatCounter collection failed: %s", exc)
+        logger.error("GoatCounter collection failed (%s): %s", type(exc).__name__, exc)
         return None

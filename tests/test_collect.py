@@ -955,6 +955,38 @@ class TestCollectGoatcounter:
         result = collect_goatcounter("what-raccoon", "token", since=SINCE)
         assert result["period_start"] == SINCE.strftime("%Y-%m-%d")
 
+    def test_null_hits_field_returns_empty_lists(self, respx_mock):
+        """API returning {"hits": null} is handled safely (not a TypeError)."""
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(200, json={"total": 5, "total_events": 0})
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(200, json={"hits": None})
+        )
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        assert result is not None
+        assert result["top_paths"] == []
+        assert result["events"] == []
+
+    def test_timeout_returns_none(self, respx_mock):
+        """A timeout is caught and returns None without crashing."""
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            side_effect=httpx.TimeoutException("timed out")
+        )
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        assert result is None
+
+    def test_hits_api_error_returns_none(self, respx_mock):
+        """Non-2xx on stats/hits (after stats/total succeeds) returns None."""
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(200, json={"total": 5, "total_events": 0})
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(429, json={"error": "rate limited"})
+        )
+        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # collect_mentions
