@@ -10,6 +10,7 @@ Tokens are valid 60 days; no refresh token is issued.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,12 +28,41 @@ _HEADERS_BASE = {
 }
 
 
+_ANALYTICS_MAX_RETRIES = 3
+_ANALYTICS_BACKOFF_BASE = 2.0  # seconds; doubles on each attempt
+
+
 def _auth_headers(access_token: str) -> dict[str, str]:
     return {**_HEADERS_BASE, "Authorization": f"Bearer {access_token}"}
 
 
 def _get(client: httpx.Client, url: str, **kwargs: Any) -> httpx.Response:
     r = client.get(url, **kwargs)
+    r.raise_for_status()
+    return r
+
+
+def _get_with_retry(
+    client: httpx.Client,
+    url: str,
+    max_retries: int = _ANALYTICS_MAX_RETRIES,
+    backoff_base: float = _ANALYTICS_BACKOFF_BASE,
+    **kwargs: Any,
+) -> httpx.Response:
+    """GET with exponential backoff on 429 rate-limit responses."""
+    for attempt in range(max_retries):
+        r = client.get(url, **kwargs)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r
+        if attempt < max_retries - 1:
+            retry_after = r.headers.get("Retry-After")
+            wait = float(retry_after) if retry_after else backoff_base ** attempt
+            logger.warning(
+                "LinkedIn API: rate-limited (429), retrying in %.0fs (attempt %d/%d)",
+                wait, attempt + 1, max_retries - 1,
+            )
+            time.sleep(wait)
     r.raise_for_status()
     return r
 
@@ -75,7 +105,7 @@ def _fetch_post_analytics(client: httpx.Client, post_urn: str) -> dict[str, Any]
     Returns a dict of metric name → value, or {} on failure.
     """
     try:
-        r = _get(
+        r = _get_with_retry(
             client,
             f"{_BASE}/rest/memberCreatorPostAnalytics",
             params={"q": "entity", "entity": post_urn},

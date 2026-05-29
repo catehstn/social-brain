@@ -1333,8 +1333,9 @@ class TestCollectLinkedinApi:
         result = collect_linkedin_api("tok", since=SINCE)
         assert result is None
 
-    def test_analytics_failure_for_one_post_still_returns_post(self, respx_mock):
-        """If per-post analytics fail, the post is still included with zero metrics."""
+    def test_analytics_failure_for_one_post_still_returns_post(self, respx_mock, monkeypatch):
+        """If per-post analytics fail after all retries, post included with zero metrics."""
+        monkeypatch.setattr("collectors.linkedin_api.time.sleep", lambda s: None)
         respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
             return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
         )
@@ -1348,6 +1349,45 @@ class TestCollectLinkedinApi:
         assert result is not None
         assert len(result["posts"]) == 1
         assert result["posts"][0]["impressions"] == 0
+
+    def test_analytics_429_retried_and_succeeds(self, respx_mock, monkeypatch):
+        """429 on first analytics attempt is retried; metrics populated on second attempt."""
+        sleep_calls: list[float] = []
+        monkeypatch.setattr("collectors.linkedin_api.time.sleep", lambda s: sleep_calls.append(s))
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            side_effect=[
+                httpx.Response(429, json={"message": "Rate limit"}),
+                httpx.Response(200, json={"elements": [_li_analytics_element("IMPRESSION", 100)]}),
+            ]
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result["posts"][0]["impressions"] == 100
+        assert len(sleep_calls) == 1
+
+    def test_analytics_retry_after_header_respected(self, respx_mock, monkeypatch):
+        """Retry-After header value is used as the sleep delay."""
+        sleep_calls: list[float] = []
+        monkeypatch.setattr("collectors.linkedin_api.time.sleep", lambda s: sleep_calls.append(s))
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "5"}, json={}),
+                httpx.Response(200, json={"elements": []}),
+            ]
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        collect_linkedin_api("tok", since=SINCE)
+        assert sleep_calls == [5.0]
 
     def test_changelogs_included_in_result(self, respx_mock):
         respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
