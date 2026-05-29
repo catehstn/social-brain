@@ -138,11 +138,12 @@ def load_latest_raw() -> tuple[dict, str]:
         return json.load(f), label
 
 
-def check_drop_staleness() -> list[str]:
+def check_drop_staleness(config: dict | None = None) -> list[str]:
     """
     Check file-drop directories for stale exports.
     Returns a list of warning strings for any that are out of date.
     Only warns if files exist (i.e. the user has previously dropped exports).
+    Pass config to suppress LinkedIn staleness warning when API token is configured.
     """
     now = datetime.now(timezone.utc)
     warnings: list[str] = []
@@ -157,17 +158,15 @@ def check_drop_staleness() -> list[str]:
                 files.extend(Path(".").glob(g))
         return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
-    # LinkedIn: must be < 24 hours old
-    for label, *globs in [
-        ("LinkedIn", "linkedin_drops/*.csv", "linkedin_drops/*.xlsx"),
-    ]:
-        newest = _most_recent(*globs)
+    # LinkedIn: must be < 24 hours old (skip if API token is configured)
+    if not (config and config.get("linkedin_access_token")):
+        newest = _most_recent("linkedin_drops/*.csv", "linkedin_drops/*.xlsx")
         if newest:
             age = now - datetime.fromtimestamp(newest.stat().st_mtime, tz=timezone.utc)
             if age > timedelta(hours=24):
                 hours = age.total_seconds() / 3600
                 warnings.append(
-                    f"{label}: export '{newest.name}' is {hours:.0f}h old — download a fresh export first."
+                    f"LinkedIn: export '{newest.name}' is {hours:.0f}h old — download a fresh export first."
                 )
 
     # O'Reilly: warn if most recent statement is > 25 days old (monthly payment cycle)
@@ -209,7 +208,7 @@ def _platform_expected(name: str, config: dict) -> bool:
     if name == "jetpack":
         return bool(config.get("jetpack_site") and config.get("jetpack_access_token"))
     if name == "linkedin":
-        return _has_files("linkedin_drops/*.csv", "linkedin_drops/*.xlsx")
+        return bool(config.get("linkedin_access_token")) or _has_files("linkedin_drops/*.csv", "linkedin_drops/*.xlsx")
     if name == "substack":
         return _has_files("substack_drops/*.csv")
     if name == "vercel":
@@ -424,6 +423,140 @@ def since_last_run() -> datetime | None:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# OAuth helpers
+# ---------------------------------------------------------------------------
+
+def _linkedin_oauth(config: dict) -> None:
+    """
+    Run the LinkedIn 3-legged OAuth flow:
+      1. Print the authorization URL and open it in the browser.
+      2. Start a one-shot localhost HTTP server to receive the callback.
+      3. Exchange the code for an access token.
+      4. Write the token to config.yaml.
+
+    Requires config keys: linkedin_client_id, linkedin_client_secret.
+    Token is written to: linkedin_access_token.
+    """
+    import http.server
+    import threading
+    import secrets
+    import urllib.parse
+    import webbrowser
+
+    client_id = config.get("linkedin_client_id", "")
+    client_secret = config.get("linkedin_client_secret", "")
+    if not client_id or not client_secret:
+        logger.error(
+            "LinkedIn OAuth requires linkedin_client_id and linkedin_client_secret in config.yaml.\n"
+            "See README for setup instructions."
+        )
+        sys.exit(1)
+
+    redirect_uri = "http://localhost:8976/callback"
+    scope = "r_dma_portability_self_serve"
+    state = secrets.token_urlsafe(16)
+
+    auth_url = (
+        "https://www.linkedin.com/oauth/v2/authorization"
+        f"?response_type=code"
+        f"&client_id={urllib.parse.quote(client_id)}"
+        f"&redirect_uri={urllib.parse.quote(redirect_uri)}"
+        f"&scope={urllib.parse.quote(scope)}"
+        f"&state={urllib.parse.quote(state)}"
+    )
+
+    # Capture the callback code via a one-shot HTTP server
+    received: dict = {}
+    server_ready = threading.Event()
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            params = dict(urllib.parse.parse_qsl(parsed.query))
+            received.update(params)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><body><h2>social-brain: LinkedIn authorised!</h2>"
+                b"<p>You can close this tab and return to the terminal.</p></body></html>"
+            )
+
+        def log_message(self, *args: object) -> None:  # suppress server logs
+            pass
+
+    server = http.server.HTTPServer(("localhost", 8976), _Handler)
+    thread = threading.Thread(target=server.handle_request, daemon=True)
+    thread.start()
+
+    print(f"\nOpening LinkedIn OAuth page in your browser...")
+    print(f"If it doesn't open automatically, visit:\n  {auth_url}\n")
+    webbrowser.open(auth_url)
+
+    print("Waiting for LinkedIn to redirect to localhost:8976 ...")
+    thread.join(timeout=120)
+
+    if not received.get("code"):
+        logger.error("OAuth timed out or no code received. Try again.")
+        sys.exit(1)
+
+    if received.get("state") != state:
+        logger.error("OAuth state mismatch — possible CSRF. Aborting.")
+        sys.exit(1)
+
+    code = received["code"]
+
+    # Exchange code for token
+    import httpx as _httpx
+    try:
+        r = _httpx.post(
+            "https://www.linkedin.com/oauth/v2/accessToken",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+    except Exception as exc:
+        logger.error("Token exchange failed: %s", exc)
+        sys.exit(1)
+
+    token_data = r.json()
+    access_token = token_data.get("access_token")
+    if not access_token:
+        logger.error("No access_token in response: %s", token_data)
+        sys.exit(1)
+
+    # Write token to config.yaml
+    with CONFIG_PATH.open() as f:
+        raw_yaml = f.read()
+
+    if "linkedin_access_token:" in raw_yaml:
+        import re as _re
+        raw_yaml = _re.sub(
+            r"^linkedin_access_token:.*$",
+            f"linkedin_access_token: {access_token}",
+            raw_yaml,
+            flags=_re.MULTILINE,
+        )
+    else:
+        raw_yaml += f"\nlinkedin_access_token: {access_token}\n"
+
+    with CONFIG_PATH.open("w") as f:
+        f.write(raw_yaml)
+
+    expires_in = token_data.get("expires_in", 5183999)
+    expires_days = expires_in // 86400
+    print(f"\nLinkedIn token saved to config.yaml (valid for ~{expires_days} days).")
+    print("Run `python run.py --platform linkedin` to verify collection works.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -467,6 +600,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Generate a compact follow-up prompt (prompt-YYYY-WNN-update.txt) for use in the same claude.ai chat as the original report.",
     )
+    mode.add_argument(
+        "--auth",
+        metavar="PLATFORM",
+        choices=["linkedin"],
+        help="Authenticate with a platform via OAuth and save the token to config.yaml. "
+             "Currently supports: linkedin",
+    )
     return parser.parse_args()
 
 
@@ -475,6 +615,12 @@ def main() -> None:
 
     if args.extract:
         extract_posts(args.extract)
+        return
+
+    if args.auth:
+        config = load_config()
+        if args.auth == "linkedin":
+            _linkedin_oauth(config)
         return
 
     if args.analyse_only and args.platform:
@@ -499,7 +645,7 @@ def main() -> None:
     # Staleness check
     # ------------------------------------------------------------------
     if not args.analyse_only:
-        stale = check_drop_staleness()
+        stale = check_drop_staleness(config)
         if stale:
             print("\nWarning: stale data detected:")
             for w in stale:

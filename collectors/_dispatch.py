@@ -9,6 +9,7 @@ from collectors.bluesky import collect_bluesky
 from collectors.buttondown import collect_buttondown
 from collectors.jetpack import collect_jetpack
 from collectors.linkedin import collect_linkedin
+from collectors.linkedin_api import collect_linkedin_api
 from collectors.substack import collect_substack
 from collectors.vercel import collect_vercel
 from collectors.amazon import collect_amazon
@@ -91,7 +92,11 @@ def collect_all(
                 username=config.get("jetpack_username", ""),
             )
         elif name == "linkedin":
-            data = collect_linkedin()
+            li_token = config.get("linkedin_access_token", "")
+            if li_token:
+                data = collect_linkedin_api(li_token, since=since)
+            else:
+                data = collect_linkedin()
         elif name == "substack":
             data = collect_substack()
         elif name == "amazon":
