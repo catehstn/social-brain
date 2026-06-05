@@ -135,6 +135,39 @@ class TestCollectMastodon:
         result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
         assert result["posts"][0]["has_attachment"] is True
 
+    def test_new_follows_failure_still_returns_posts(self, respx_mock):
+        """If the notifications API fails, posts already collected are still returned."""
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            side_effect=[
+                httpx.Response(200, json=[self._post("p1")]),
+                httpx.Response(200, json=[]),
+            ]
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(401)
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE, access_token="tok")
+        assert result is not None
+        assert len(result["posts"]) == 1
+        assert "new_follows" not in result
+
+    def test_lookup_timeout_returns_none(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            side_effect=httpx.TimeoutException("timed out")
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result is None
+
+    def test_lookup_http_status_error_returns_none(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(500, text="server error")
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # Bluesky
