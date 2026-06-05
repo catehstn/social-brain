@@ -1778,6 +1778,39 @@ class TestCollectCalendly:
         result = collect_calendly("tok", since=SINCE, lead_gen_event="Nonexistent Event")
         assert result["lead_gen_bookings"] == 0
 
+    def test_active_events_fetched_without_max_start_time(self, respx_mock):
+        """Active events have no max_start_time so future-scheduled bookings are counted."""
+        _calendly_mock(respx_mock)
+        active_request = None
+
+        def side_effect(request):
+            nonlocal active_request
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                active_request = request
+                return httpx.Response(200, json={"collection": []})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        collect_calendly("tok", since=SINCE)
+        assert active_request is not None
+        assert "max_start_time" not in dict(active_request.url.params)
+
+    def test_upcoming_booking_counted(self, respx_mock):
+        """A booking whose session start is in the future is still counted as active."""
+        _calendly_mock(respx_mock)
+        future_event = [{"event_type": ET_URI_INTRO}]
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": future_event})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE)
+        assert result["total_bookings"] == 1
+
     def test_no_lead_gen_event_omits_field(self, respx_mock):
         _calendly_mock(respx_mock)
         respx_mock.get("https://api.calendly.com/scheduled_events").mock(
