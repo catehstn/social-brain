@@ -412,6 +412,39 @@ class TestCollectButtondown:
         assert "subscriber_tags" not in result
         assert "new_subscribers_by_tag" not in result
 
+    def test_recency_limit_collects_four_newest(self, respx_mock):
+        """Without since, only 4 emails per newsletter are collected."""
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        five_emails = [self._email(f"e{i}", f"Issue {i}", RECENT) for i in range(1, 6)]
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": five_emails, "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 100})
+        )
+        result = collect_buttondown("apikey")  # no since → recency limit
+        assert result is not None
+        assert len(result["newsletters"]) == 4
+
+    def test_ordering_param_sent_newest_first(self, respx_mock):
+        """ordering=-publish_date is included in the emails API request."""
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [], "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 100})
+        )
+        collect_buttondown("apikey", since=SINCE)
+        emails_call = next(c for c in respx_mock.calls if "/v1/emails" in str(c.request.url))
+        assert emails_call.request.url.params["ordering"] == "-publish_date"
+
 
 # ---------------------------------------------------------------------------
 # Jetpack
