@@ -256,7 +256,7 @@ def _platform_summary(name: str, data: dict) -> str:
         if name == "amazon":
             return f"{len(data.get('by_marketplace', {}))} marketplace(s)"
         if name == "goatcounter":
-            return f"{data.get('total_pageviews', '?')} pageviews"
+            return f"{data.get('total_visitors', '?')} visitors, {data.get('total_events', '?')} events"
         if name == "oreilly":
             count = data.get("payment_count", 0)
             total = data.get("total_paid", 0.0)
