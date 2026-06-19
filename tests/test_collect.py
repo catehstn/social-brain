@@ -915,11 +915,11 @@ class TestCollectAmazon:
 # ---------------------------------------------------------------------------
 
 class TestCollectVercel:
-    BASE = "https://vercel.com/api/web-analytics"
+    BASE = "https://vercel.com/api/web-analytics/v2"
 
     def _mock_all(self, respx_mock):
         respx_mock.get(f"{self.BASE}/overview").mock(
-            return_value=httpx.Response(200, json={"total": 1000, "devices": 800, "bounceRate": 45.0})
+            return_value=httpx.Response(200, json={"total": 1000, "devices": 800})
         )
         respx_mock.get(f"{self.BASE}/timeseries").mock(
             return_value=httpx.Response(200, json={"data": {"groups": {"all": [
@@ -939,6 +939,7 @@ class TestCollectVercel:
         assert result["page_views"] == 1000
         assert result["visitors"] == 800
         assert len(result["daily"]) == 2
+        assert "bounce_rate_pct" not in result
 
     def test_daily_entries_mapped(self, respx_mock):
         self._mock_all(respx_mock)

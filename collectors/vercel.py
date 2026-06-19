@@ -28,7 +28,7 @@ def collect_vercel(
 
     try:
         now = _utcnow()
-        base = "https://vercel.com/api/web-analytics"
+        base = "https://vercel.com/api/web-analytics/v2"
         headers = {"Authorization": f"Bearer {token}"}
         common_params: dict[str, Any] = {
             "projectId": project_slug,
@@ -58,10 +58,9 @@ def collect_vercel(
             ref_r.raise_for_status()
             referrers_data = ref_r.json()
 
-        # overview: {"total": N, "devices": N, "bounceRate": N}
+        # overview: {"total": N, "devices": N}  (bounceRate removed in v2)
         page_views = overview.get("total")
         visitors = overview.get("devices")
-        bounce_rate = overview.get("bounceRate")
 
         # timeseries: {"data": {"groups": {"all": [{"key": "YYYY-MM-DD", "total": N, "devices": N}, ...]}}}
         daily = []
@@ -93,7 +92,6 @@ def collect_vercel(
             "since": _iso(since),
             "page_views": page_views,
             "visitors": visitors,
-            "bounce_rate_pct": bounce_rate,
             "daily": daily,
             "top_pages": top_pages,
             "top_referrers": top_referrers,
