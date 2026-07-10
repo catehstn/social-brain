@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from collectors.mastodon import collect_mastodon
@@ -46,6 +46,30 @@ def _resolve_stripe_tokens(config: dict) -> dict[str, str]:
         if label and v:
             tokens[label] = str(v)
     return tokens
+
+
+def _stripe_since(config: dict, since: datetime | None) -> datetime | None:
+    """
+    Resolve the Stripe lookback window.
+
+    An explicit global `since` (e.g. from ``--months``) always wins. Otherwise
+    use ``stripe_since_days`` from config (default 60) so month-to-date and
+    recent activity are covered — the collector's own 14-day default is too
+    short for monthly rollups, and Stripe history is cheap to over-fetch.
+
+    A non-positive ``stripe_since_days`` falls back to the collector's internal
+    default (returns None).
+    """
+    if since is not None:
+        return since
+    days = config.get("stripe_since_days", 60)
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 60
+    if days <= 0:
+        return None
+    return datetime.now(timezone.utc) - timedelta(days=days)
 
 
 PLATFORM_COLLECTORS = {
@@ -196,7 +220,7 @@ def collect_all(
             if not tokens:
                 logger.info("Stripe: no tokens configured — skipping")
                 return
-            data = collect_stripe(tokens, since=since)
+            data = collect_stripe(tokens, since=_stripe_since(config, since))
         else:
             logger.error("Unknown platform: %s", name)
             return

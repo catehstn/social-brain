@@ -4,7 +4,7 @@ All HTTP is mocked with respx; no real Stripe key needed.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pandas as pd
@@ -12,7 +12,7 @@ import pytest
 import respx
 
 from collectors.stripe import collect_stripe
-from collectors._dispatch import _resolve_stripe_tokens
+from collectors._dispatch import _resolve_stripe_tokens, _stripe_since
 from store import _process_stripe, _load
 
 SINCE = datetime(2025, 12, 1, tzinfo=timezone.utc)
@@ -57,6 +57,39 @@ class TestResolveTokens:
         cfg = {"stripe_token": "should-not-appear", "other_key": "x"}
         # "stripe_token" (no trailing _label) has no suffix → skipped
         assert _resolve_stripe_tokens(cfg) == {}
+
+
+# ---------------------------------------------------------------------------
+# Lookback window (_stripe_since)
+# ---------------------------------------------------------------------------
+
+class TestStripeSince:
+    def test_explicit_since_wins(self):
+        # An explicit global since always overrides stripe_since_days.
+        assert _stripe_since({"stripe_since_days": 5}, SINCE) == SINCE
+
+    def test_default_is_60_days(self):
+        before = datetime.now(timezone.utc) - timedelta(days=60)
+        got = _stripe_since({}, None)
+        after = datetime.now(timezone.utc) - timedelta(days=60)
+        assert before <= got <= after
+
+    def test_configured_days_used(self):
+        before = datetime.now(timezone.utc) - timedelta(days=90)
+        got = _stripe_since({"stripe_since_days": 90}, None)
+        after = datetime.now(timezone.utc) - timedelta(days=90)
+        assert before <= got <= after
+
+    def test_non_positive_falls_back_to_collector_default(self):
+        # 0 / negative → None, letting collect_stripe use its own default.
+        assert _stripe_since({"stripe_since_days": 0}, None) is None
+        assert _stripe_since({"stripe_since_days": -3}, None) is None
+
+    def test_bad_value_falls_back_to_60(self):
+        before = datetime.now(timezone.utc) - timedelta(days=60)
+        got = _stripe_since({"stripe_since_days": "not-a-number"}, None)
+        after = datetime.now(timezone.utc) - timedelta(days=60)
+        assert before <= got <= after
 
     def test_no_tokens_returns_empty(self):
         assert _resolve_stripe_tokens({}) == {}
