@@ -178,6 +178,113 @@ class TestCollectStripe:
         assert result is not None
         assert set(result["accounts"].keys()) == {"good"}
 
+    def test_pagination_partial_failure_returns_partial(self, respx_mock, caplog):
+        """A mid-pagination failure should return the pages already fetched."""
+        respx_mock.get(f"{STRIPE}/products").mock(
+            return_value=httpx.Response(200, json=_products_response([]))
+        )
+        respx_mock.get(f"{STRIPE}/checkout/sessions").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/invoices").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        # Two charges pages: first succeeds with has_more=True, second 503s.
+        page1 = _paginated([
+            {"id": "ch_1", "status": "succeeded", "amount": 1000, "currency": "usd",
+             "created": int(datetime(2026, 6, 1, tzinfo=timezone.utc).timestamp())},
+        ], has_more=True)
+        respx_mock.get(f"{STRIPE}/charges").mock(side_effect=[
+            httpx.Response(200, json=page1),
+            httpx.Response(503, json={"error": {"message": "temporary"}}),
+        ])
+        with caplog.at_level("WARNING"):
+            result = collect_stripe({"primary": "rk_test"}, since=SINCE)
+        # Partial result kept, not discarded
+        assert result is not None
+        assert result["accounts"]["primary"]["charges_succeeded"] == 1
+        assert result["accounts"]["primary"]["gross_cents"] == 1000
+        # Warning surfaced
+        assert any("partial results" in r.getMessage() for r in caplog.records)
+
+    def test_first_page_failure_returns_none(self, respx_mock):
+        """Failure on the very first page (no prior data) still returns None."""
+        respx_mock.get(f"{STRIPE}/products").mock(
+            return_value=httpx.Response(200, json=_products_response([]))
+        )
+        respx_mock.get(f"{STRIPE}/checkout/sessions").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/invoices").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/charges").mock(
+            return_value=httpx.Response(503, json={"error": {"message": "down"}})
+        )
+        # Charges = None → treated as empty, account still returns with 0 charges
+        result = collect_stripe({"primary": "rk_test"}, since=SINCE)
+        assert result is not None
+        assert result["accounts"]["primary"]["charges_succeeded"] == 0
+        assert result["accounts"]["primary"]["gross_cents"] == 0
+
+    def test_non_usd_charges_excluded_from_aggregates(self, respx_mock, caplog):
+        """Non-USD charges are excluded from monthly/gross with a warning; USD kept."""
+        respx_mock.get(f"{STRIPE}/products").mock(
+            return_value=httpx.Response(200, json=_products_response([]))
+        )
+        respx_mock.get(f"{STRIPE}/checkout/sessions").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/invoices").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/charges").mock(
+            return_value=httpx.Response(200, json=_paginated([
+                {"id": "ch_usd", "status": "succeeded", "amount": 10000,
+                 "amount_refunded": 500, "currency": "usd",
+                 "created": int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp())},
+                {"id": "ch_eur", "status": "succeeded", "amount": 50000,
+                 "amount_refunded": 1000, "currency": "eur",
+                 "created": int(datetime(2026, 3, 5, tzinfo=timezone.utc).timestamp())},
+                {"id": "ch_gbp", "status": "succeeded", "amount": 20000,
+                 "amount_refunded": 0, "currency": "gbp",
+                 "created": int(datetime(2026, 4, 1, tzinfo=timezone.utc).timestamp())},
+            ]))
+        )
+        with caplog.at_level("WARNING"):
+            result = collect_stripe({"primary": "rk_test"}, since=SINCE)
+        acct = result["accounts"]["primary"]
+        assert acct["currency"] == "usd"
+        assert acct["charges_succeeded"] == 1  # only the USD charge
+        assert acct["gross_cents"] == 10000
+        assert acct["refunded_cents"] == 500  # non-USD refunds also excluded
+        assert len(acct["monthly"]) == 1
+        assert acct["monthly"][0]["month"] == "2026-03"
+        # Warning fired mentioning both foreign currencies
+        msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("eur" in m and "gbp" in m for m in msgs)
+
+    def test_all_usd_no_warning(self, respx_mock, caplog):
+        """When every charge is USD, no currency warning is emitted."""
+        respx_mock.get(f"{STRIPE}/products").mock(
+            return_value=httpx.Response(200, json=_products_response([]))
+        )
+        respx_mock.get(f"{STRIPE}/checkout/sessions").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/invoices").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/charges").mock(
+            return_value=httpx.Response(200, json=_paginated([
+                {"id": "ch_1", "status": "succeeded", "amount": 1000, "currency": "usd",
+                 "created": int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp())},
+            ]))
+        )
+        with caplog.at_level("WARNING"):
+            collect_stripe({"primary": "rk_test"}, since=SINCE)
+        assert not any("non-USD" in r.getMessage() for r in caplog.records)
+
     def test_monthly_rollup_groups_by_utc_month(self, respx_mock):
         respx_mock.get(f"{STRIPE}/products").mock(
             return_value=httpx.Response(200, json=_products_response([]))
