@@ -30,9 +30,9 @@ def _minimal_config() -> dict:
     return {
         "mastodon_instance": "hachyderm.io",
         "mastodon_handle": "cate",
-        "bluesky_handle": "catehstn.bsky.social",
+        "bluesky_handle": "alice.bsky.social",
         "buttondown_api_key": "key",
-        "jetpack_site": "cate.blog",
+        "jetpack_site": "example.com",
         "jetpack_access_token": "token",
     }
 
@@ -753,9 +753,9 @@ class TestAuthSubcommand:
         cfg = {
             "mastodon_instance": "hachyderm.io",
             "mastodon_handle": "cate",
-            "bluesky_handle": "catehstn.bsky.social",
+            "bluesky_handle": "alice.bsky.social",
             "buttondown_api_key": "key",
-            "jetpack_site": "cate.blog",
+            "jetpack_site": "example.com",
             "jetpack_access_token": "token",
             "linkedin_client_id": "client123",
             "linkedin_client_secret": "secret456",
