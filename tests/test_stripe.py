@@ -58,6 +58,9 @@ class TestResolveTokens:
         # "stripe_token" (no trailing _label) has no suffix → skipped
         assert _resolve_stripe_tokens(cfg) == {}
 
+    def test_no_tokens_returns_empty(self):
+        assert _resolve_stripe_tokens({}) == {}
+
 
 # ---------------------------------------------------------------------------
 # Lookback window (_stripe_since)
@@ -90,9 +93,6 @@ class TestStripeSince:
         got = _stripe_since({"stripe_since_days": "not-a-number"}, None)
         after = datetime.now(timezone.utc) - timedelta(days=60)
         assert before <= got <= after
-
-    def test_no_tokens_returns_empty(self):
-        assert _resolve_stripe_tokens({}) == {}
 
 
 # ---------------------------------------------------------------------------
