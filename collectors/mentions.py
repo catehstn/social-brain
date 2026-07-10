@@ -29,7 +29,7 @@ def collect_mentions(
       - Bluesky notifications (requires bluesky_app_password)
       - Google Search Console (requires gsc_credentials_file)
 
-    `domains` is a list like ["cate.blog", "driyourcareer.com"].
+    `domains` is a list like ["example.com", "example.org"].
     """
     if not domains:
         logger.info("Mentions: no monitored_domains configured — skipping")

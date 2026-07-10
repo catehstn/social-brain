@@ -89,7 +89,7 @@ Collects: all queued posts across connected channels — shown to Claude as upco
        async src="//gc.zgo.at/count.js"></script>
    ```
 3. Settings → API → Create token (read access)
-4. Set `goatcounter_site` (just the subdomain, e.g. `what-raccoon`) and `goatcounter_token` in `config.yaml`
+4. Set `goatcounter_site` (just the subdomain, e.g. `mysite` if your dashboard is at `https://mysite.goatcounter.com`) and `goatcounter_token` in `config.yaml`
 
 To track custom events (e.g. quiz results), call `window.goatcounter.count()` with `event: true` in your JS.
 

@@ -234,7 +234,7 @@ class TestProcessMastodon:
 class TestProcessBluesky:
     def _collected(self, **overrides):
         base = {
-            "handle": "catehstn.bsky.social",
+            "handle": "alice.bsky.social",
             "posts": [
                 {"uri": "at://did:plc:abc/app.bsky.feed.post/1", "created_at": "2026-03-01T10:00:00Z",
                  "text": "Hello Bluesky", "likes": 10, "reposts": 3, "replies": 2, "has_attachment": False},
@@ -297,7 +297,7 @@ class TestProcessJetpack:
                 {"date": "2026-03-02", "views": 120},
             ],
             "top_posts": [
-                {"href": "https://cate.blog/post-a", "title": "Post A", "views": 80},
+                {"href": "https://example.com/post-a", "title": "Post A", "views": 80},
             ],
             "referrers": [
                 {"name": "twitter.com", "views": 30},
@@ -553,8 +553,8 @@ class TestProcessMentions:
             "sources": {
                 "hacker_news": [
                     {"objectID": "hn1", "type": "story", "title": "Cool post",
-                     "url": "https://cate.blog/post", "points": 42, "num_comments": 5,
-                     "created_at": "2026-03-01T10:00:00Z", "domain": "cate.blog"},
+                     "url": "https://example.com/post", "points": 42, "num_comments": 5,
+                     "created_at": "2026-03-01T10:00:00Z", "domain": "example.com"},
                 ],
                 "mastodon": [
                     {"id": "m1", "account": {"acct": "friend@mastodon.social"},
@@ -566,9 +566,9 @@ class TestProcessMentions:
                      "record": {"text": "Nice work!"}, "indexedAt": "2026-03-01T12:00:00Z"},
                 ],
                 "google_search_console": [
-                    {"site": "cate.blog", "query": "engineering management", "page": "https://cate.blog/post",
+                    {"site": "example.com", "query": "engineering management", "page": "https://example.com/post",
                      "clicks": 10, "impressions": 200, "ctr": 0.05, "position": 8.2},
-                    {"site": "whatsmyjob.club", "query": "job titles", "page": "https://whatsmyjob.club/",
+                    {"site": "example.org", "query": "job titles", "page": "https://example.org/",
                      "clicks": 5, "impressions": 100, "ctr": 0.05, "position": 12.0},
                 ],
             }
@@ -605,17 +605,17 @@ class TestProcessMentions:
         sheets = {}
         _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
         sites = set(sheets["gsc_queries"]["site"].tolist())
-        assert "cate.blog" in sites
-        assert "whatsmyjob.club" in sites
+        assert "example.com" in sites
+        assert "example.org" in sites
 
     def test_gsc_upsert_by_site_query_page(self, tmp_path):
         path = tmp_path / "s.xlsx"
         first = {"sources": {"google_search_console": [
-            {"site": "cate.blog", "query": "mgmt", "page": "https://cate.blog/p",
+            {"site": "example.com", "query": "mgmt", "page": "https://example.com/p",
              "clicks": 5, "impressions": 100, "ctr": 0.05, "position": 10.0},
         ]}}
         second = {"sources": {"google_search_console": [
-            {"site": "cate.blog", "query": "mgmt", "page": "https://cate.blog/p",
+            {"site": "example.com", "query": "mgmt", "page": "https://example.com/p",
              "clicks": 8, "impressions": 120, "ctr": 0.067, "position": 9.5},
         ]}}
         for collected in [first, second]:
@@ -745,9 +745,9 @@ class TestProcessMentions:
                 "hacker_news": [
                     {
                         "type": "story",
-                        "domain": "cate.blog",
+                        "domain": "example.com",
                         "title": "How to X",
-                        "url": "https://cate.blog/how-to-x",
+                        "url": "https://example.com/how-to-x",
                         "hn_url": "https://news.ycombinator.com/item?id=1",
                         "points": 42,
                         "num_comments": 7,
@@ -772,9 +772,9 @@ class TestProcessMentions:
                 ],
                 "google_search_console": [
                     {
-                        "domain": "cate.blog",
+                        "domain": "example.com",
                         "query": "raccoon",
-                        "page": "https://cate.blog/raccoon",
+                        "page": "https://example.com/raccoon",
                         "clicks": 5,
                         "impressions": 100,
                         "ctr": 5.0,
@@ -790,7 +790,7 @@ class TestProcessMentions:
         assert "hn_mentions" in sheets
         row = sheets["hn_mentions"].iloc[0]
         assert row["hn_url"].startswith("https://news.ycombinator.com/")
-        assert row["domain"] == "cate.blog"
+        assert row["domain"] == "example.com"
         assert row["points"] == 42
 
     def test_writes_mastodon_mentions(self, tmp_path):
@@ -813,7 +813,7 @@ class TestProcessMentions:
         _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
         assert "gsc_queries" in sheets
         row = sheets["gsc_queries"].iloc[0]
-        assert row["domain"] == "cate.blog"
+        assert row["domain"] == "example.com"
         assert row["query"] == "raccoon"
 
     def test_upserts_by_url_dedupes_across_runs(self, tmp_path):
