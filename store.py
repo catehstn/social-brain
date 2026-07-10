@@ -379,62 +379,72 @@ def _process_stripe(collected: dict, sheets: dict, store_path: Path, now: str) -
 
 
 def _process_mentions(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist mentions. Matches the flat schema mentions.py returns:
+      HN         → {type, domain, title, url, hn_url, points, num_comments?, created_at}
+      Mastodon   → {created_at, from, content, url}
+      Bluesky    → {created_at, from, content, url}
+      GSC        → {domain, query, page, clicks, impressions, ctr, position}
+    """
     sources = collected.get("sources", {})
 
     hn_hits = sources.get("hacker_news", [])
     if hn_hits:
         df_new = pd.DataFrame([{
-            "object_id": h.get("objectID", ""),
+            "hn_url": h.get("hn_url", ""),
             "type": h.get("type", ""),
+            "domain": h.get("domain", ""),
             "title": h.get("title", ""),
             "url": h.get("url", ""),
-            "points": h.get("points", 0),
-            "num_comments": h.get("num_comments", 0),
+            "points": h.get("points", 0) or 0,
+            "num_comments": h.get("num_comments", 0) or 0,
             "created_at": h.get("created_at", ""),
-            "domain": h.get("domain", ""),
-        } for h in hn_hits if h.get("objectID")])
-        sheets["hn_mentions"] = _upsert(_load(store_path, "hn_mentions"), df_new, ["object_id"])
+        } for h in hn_hits if h.get("hn_url")])
+        if not df_new.empty:
+            sheets["hn_mentions"] = _upsert(_load(store_path, "hn_mentions"), df_new, ["hn_url"])
 
     masto_mentions = sources.get("mastodon", [])
     if masto_mentions:
         df_new = pd.DataFrame([{
-            "notification_id": m.get("id", ""),
-            "account": m.get("account", {}).get("acct", "") if isinstance(m.get("account"), dict) else "",
-            "content": str(m.get("status", {}).get("content", "") if isinstance(m.get("status"), dict) else "")[:300],
+            "url": m.get("url", ""),
+            "from": m.get("from", ""),
+            "content": str(m.get("content", ""))[:300],
             "created_at": m.get("created_at", ""),
-        } for m in masto_mentions if m.get("id")])
-        sheets["mastodon_mentions"] = _upsert(
-            _load(store_path, "mastodon_mentions"), df_new, ["notification_id"]
-        )
+        } for m in masto_mentions if m.get("url")])
+        if not df_new.empty:
+            sheets["mastodon_mentions"] = _upsert(
+                _load(store_path, "mastodon_mentions"), df_new, ["url"]
+            )
 
     bsky_mentions = sources.get("bluesky", [])
     if bsky_mentions:
         df_new = pd.DataFrame([{
-            "uri": m.get("uri", m.get("cid", "")),
-            "author": m.get("author", {}).get("handle", "") if isinstance(m.get("author"), dict) else "",
-            "text": str(m.get("record", {}).get("text", "") if isinstance(m.get("record"), dict) else "")[:300],
-            "indexed_at": m.get("indexedAt", ""),
-        } for m in bsky_mentions])
-        if not df_new.empty and "uri" in df_new.columns:
+            "url": m.get("url", ""),
+            "from": m.get("from", ""),
+            "content": str(m.get("content", ""))[:300],
+            "created_at": m.get("created_at", ""),
+        } for m in bsky_mentions if m.get("url")])
+        if not df_new.empty:
             sheets["bluesky_mentions"] = _upsert(
-                _load(store_path, "bluesky_mentions"), df_new, ["uri"]
+                _load(store_path, "bluesky_mentions"), df_new, ["url"]
             )
 
     gsc_rows = sources.get("google_search_console", [])
     if gsc_rows:
         df_new = pd.DataFrame([{
-            "site": g.get("site", ""),
+            "domain": g.get("domain", ""),
             "query": g.get("query", ""),
             "page": g.get("page", ""),
-            "clicks": g.get("clicks", 0),
-            "impressions": g.get("impressions", 0),
+            "clicks": g.get("clicks", 0) or 0,
+            "impressions": g.get("impressions", 0) or 0,
             "ctr": g.get("ctr"),
             "position": g.get("position"),
             "last_updated": now,
         } for g in gsc_rows])
-        sheets["gsc_queries"] = _upsert(
-            _load(store_path, "gsc_queries"), df_new, ["site", "query", "page"]
-        )
+        if not df_new.empty:
+            sheets["gsc_queries"] = _upsert(
+                _load(store_path, "gsc_queries"), df_new, ["domain", "query", "page"]
+            )
 
 
 # ---------------------------------------------------------------------------

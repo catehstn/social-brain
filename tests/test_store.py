@@ -732,3 +732,114 @@ class TestUpdate:
         result = _load(path, "account_snapshots")
         assert len(result) == 1
         assert result.iloc[0]["platform"] == "mastodon"
+
+
+# ---------------------------------------------------------------------------
+# _process_mentions — flat schema (matches what collectors/mentions.py returns)
+# ---------------------------------------------------------------------------
+
+class TestProcessMentions:
+    def _collected(self):
+        return {
+            "sources": {
+                "hacker_news": [
+                    {
+                        "type": "story",
+                        "domain": "cate.blog",
+                        "title": "How to X",
+                        "url": "https://cate.blog/how-to-x",
+                        "hn_url": "https://news.ycombinator.com/item?id=1",
+                        "points": 42,
+                        "num_comments": 7,
+                        "created_at": "2026-03-01",
+                    },
+                ],
+                "mastodon": [
+                    {
+                        "created_at": "2026-03-02",
+                        "from": "alice@fosstodon.org",
+                        "content": "nice post!",
+                        "url": "https://fosstodon.org/@alice/12345",
+                    },
+                ],
+                "bluesky": [
+                    {
+                        "created_at": "2026-03-03",
+                        "from": "bob.bsky.social",
+                        "content": "great read",
+                        "url": "https://bsky.app/profile/bob.bsky.social/post/abc",
+                    },
+                ],
+                "google_search_console": [
+                    {
+                        "domain": "cate.blog",
+                        "query": "raccoon",
+                        "page": "https://cate.blog/raccoon",
+                        "clicks": 5,
+                        "impressions": 100,
+                        "ctr": 5.0,
+                        "position": 3.1,
+                    },
+                ],
+            }
+        }
+
+    def test_writes_hn_mentions(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "hn_mentions" in sheets
+        row = sheets["hn_mentions"].iloc[0]
+        assert row["hn_url"].startswith("https://news.ycombinator.com/")
+        assert row["domain"] == "cate.blog"
+        assert row["points"] == 42
+
+    def test_writes_mastodon_mentions(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "mastodon_mentions" in sheets
+        row = sheets["mastodon_mentions"].iloc[0]
+        assert row["from"] == "alice@fosstodon.org"
+        assert row["content"] == "nice post!"
+
+    def test_writes_bluesky_mentions(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "bluesky_mentions" in sheets
+        row = sheets["bluesky_mentions"].iloc[0]
+        assert row["from"] == "bob.bsky.social"
+
+    def test_writes_gsc_queries(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "gsc_queries" in sheets
+        row = sheets["gsc_queries"].iloc[0]
+        assert row["domain"] == "cate.blog"
+        assert row["query"] == "raccoon"
+
+    def test_upserts_by_url_dedupes_across_runs(self, tmp_path):
+        """Same mention URL from two runs should upsert to a single row."""
+        path = tmp_path / "s.xlsx"
+        collected = self._collected()
+
+        # First run: write the sheet so it exists on disk
+        sheets1 = {}
+        _process_mentions(collected, sheets1, path, NOW)
+        with pd.ExcelWriter(path, engine="openpyxl") as w:
+            sheets1["mastodon_mentions"].to_excel(w, sheet_name="mastodon_mentions", index=False)
+
+        # Second run with the same data: existing row should be replaced, not appended
+        sheets2 = {}
+        _process_mentions(collected, sheets2, path, NOW)
+        assert len(sheets2["mastodon_mentions"]) == 1
+
+    def test_empty_sources_writes_nothing(self, tmp_path):
+        sheets = {}
+        _process_mentions({"sources": {"hacker_news": [], "mastodon": [], "bluesky": []}}, sheets, tmp_path / "s.xlsx", NOW)
+        assert sheets == {}
+
+    def test_missing_url_dropped(self, tmp_path):
+        """A mention with no url can't be upserted, so it's dropped."""
+        sheets = {}
+        collected = {"sources": {"mastodon": [{"from": "x", "content": "y", "created_at": "2026-01"}]}}
+        _process_mentions(collected, sheets, tmp_path / "s.xlsx", NOW)
+        assert "mastodon_mentions" not in sheets
