@@ -83,6 +83,7 @@ def get_known_platforms(store_path: Path = STORE_PATH) -> set[str]:
             "vercel": "vercel",
             "amazon": "amazon",
             "mentions": "mentions",
+            "stripe": "stripe",
         }
         for sheet in xl.sheet_names:
             for prefix, platform in prefix_map.items():
@@ -307,6 +308,76 @@ def _process_amazon(collected: dict, sheets: dict, store_path: Path, now: str) -
         sheets["amazon"] = _upsert(_load(store_path, "amazon"), df_new, ["asin", "marketplace"])
 
 
+def _process_stripe(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist Stripe data:
+      - stripe_monthly: (account, month) → count, gross_cents, currency
+      - stripe_sessions: paid checkout sessions with metadata flattened to JSON
+      - stripe_invoices: paid invoices with line-item summary
+      - stripe_products: current product catalogue per account
+    """
+    import json as _json
+    accounts = collected.get("accounts", {}) or {}
+
+    monthly_rows = []
+    session_rows = []
+    invoice_rows = []
+    product_rows = []
+    for label, acct in accounts.items():
+        currency = (acct.get("currency") or "usd").upper()
+        for m in acct.get("monthly", []) or []:
+            monthly_rows.append({
+                "account": label,
+                "month": m.get("month", ""),
+                "count": m.get("count", 0),
+                "gross_cents": m.get("gross_cents", 0),
+                "currency": currency,
+                "last_updated": now,
+            })
+        for s in acct.get("paid_sessions", []) or []:
+            session_rows.append({
+                "session_id": s.get("id", ""),
+                "account": label,
+                "created": s.get("created", ""),
+                "amount_cents": s.get("amount_cents") or 0,
+                "currency": (s.get("currency") or "").upper() or currency,
+                "customer_email": s.get("customer_email") or "",
+                "metadata_json": _json.dumps(s.get("metadata") or {}, sort_keys=True),
+                "last_updated": now,
+            })
+        for i in acct.get("paid_invoices", []) or []:
+            invoice_rows.append({
+                "invoice_id": i.get("id", ""),
+                "account": label,
+                "created": i.get("created", ""),
+                "amount_paid_cents": i.get("amount_paid_cents") or 0,
+                "currency": (i.get("currency") or "").upper() or currency,
+                "lines_json": _json.dumps(i.get("lines") or [], sort_keys=True),
+                "last_updated": now,
+            })
+        for p in acct.get("products", []) or []:
+            product_rows.append({
+                "product_id": p.get("id", ""),
+                "account": label,
+                "name": p.get("name", "") or "",
+                "active": bool(p.get("active", False)),
+                "last_updated": now,
+            })
+
+    if monthly_rows:
+        df = pd.DataFrame(monthly_rows)
+        sheets["stripe_monthly"] = _upsert(_load(store_path, "stripe_monthly"), df, ["account", "month"])
+    if session_rows:
+        df = pd.DataFrame(session_rows)
+        sheets["stripe_sessions"] = _upsert(_load(store_path, "stripe_sessions"), df, ["session_id"])
+    if invoice_rows:
+        df = pd.DataFrame(invoice_rows)
+        sheets["stripe_invoices"] = _upsert(_load(store_path, "stripe_invoices"), df, ["invoice_id"])
+    if product_rows:
+        df = pd.DataFrame(product_rows)
+        sheets["stripe_products"] = _upsert(_load(store_path, "stripe_products"), df, ["product_id", "account"])
+
+
 def _process_mentions(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
     sources = collected.get("sources", {})
 
@@ -379,6 +450,7 @@ _PROCESSORS = {
     "vercel": _process_vercel,
     "amazon": _process_amazon,
     "mentions": _process_mentions,
+    "stripe": _process_stripe,
 }
 
 

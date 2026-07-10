@@ -18,8 +18,35 @@ from collectors.mentions import collect_mentions
 from collectors.goatcounter import collect_goatcounter
 from collectors.oreilly import collect_oreilly
 from collectors.calendly import collect_calendly
+from collectors.stripe import collect_stripe
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_stripe_tokens(config: dict) -> dict[str, str]:
+    """
+    Extract Stripe tokens from config. Supports two shapes:
+
+    1. `stripe_tokens: {label: key, ...}` — dict of user-labelled accounts.
+    2. Flat keys `stripe_token_<label>: key` — any config key matching this
+       prefix is treated as one Stripe account (label is the suffix).
+
+    Empty tokens are dropped. Returns {} if no tokens configured.
+    """
+    tokens: dict[str, str] = {}
+    dict_form = config.get("stripe_tokens") or {}
+    if isinstance(dict_form, dict):
+        for label, key in dict_form.items():
+            if key:
+                tokens[str(label)] = str(key)
+    for k, v in config.items():
+        if not isinstance(k, str) or not k.startswith("stripe_token_"):
+            continue
+        label = k[len("stripe_token_"):]
+        if label and v:
+            tokens[label] = str(v)
+    return tokens
+
 
 PLATFORM_COLLECTORS = {
     "mastodon": "collect_mastodon",
@@ -35,6 +62,7 @@ PLATFORM_COLLECTORS = {
     "goatcounter": "collect_goatcounter",
     "oreilly": "collect_oreilly",
     "calendly": "collect_calendly",
+    "stripe": "collect_stripe",
 }
 
 
@@ -163,6 +191,12 @@ def collect_all(
                 logger.info("Calendly: calendly_token not configured — skipping")
                 return
             data = collect_calendly(calendly_token, since=since, lead_gen_event=config.get("calendly_lead_gen_event") or None)
+        elif name == "stripe":
+            tokens = _resolve_stripe_tokens(config)
+            if not tokens:
+                logger.info("Stripe: no tokens configured — skipping")
+                return
+            data = collect_stripe(tokens, since=since)
         else:
             logger.error("Unknown platform: %s", name)
             return

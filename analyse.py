@@ -152,6 +152,25 @@ def _trim_data(data: dict[str, Any], months: int | None = None) -> dict[str, Any
     for post in data.get("upcoming", {}).get("sources", {}).get("wordpress", []):
         post["content"] = post.get("content", "")[:500]
 
+    # Stripe: keep monthly rollup and metadata-bearing session records; strip
+    # PII (customer_email) and drop the product catalogue since it's static.
+    # Cap paid_sessions at 40 most-recent per account.
+    stripe_data = data.get("stripe")
+    if stripe_data:
+        for label, acct in (stripe_data.get("accounts") or {}).items():
+            acct.pop("products", None)
+            sessions = acct.get("paid_sessions") or []
+            for s in sessions:
+                s.pop("customer_email", None)
+                s.pop("id", None)
+            if len(sessions) > 40:
+                sessions.sort(key=lambda s: s.get("created") or 0, reverse=True)
+                acct["paid_sessions"] = sessions[:40]
+                acct["paid_sessions_note"] = f"Showing most recent 40 of {len(sessions)} paid sessions"
+            invoices = acct.get("paid_invoices") or []
+            for inv in invoices:
+                inv.pop("id", None)
+
     return data
 
 

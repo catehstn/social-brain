@@ -11,6 +11,7 @@ from collectors.mentions import collect_mentions
 from collectors.goatcounter import collect_goatcounter
 from collectors.oreilly import collect_oreilly, _parse_oreilly_eml
 from collectors.calendly import collect_calendly
+from collectors.stripe import collect_stripe
 from collectors._dispatch import collect_all, PLATFORM_COLLECTORS
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "collect_oreilly",
     "_parse_oreilly_eml",
     "collect_calendly",
+    "collect_stripe",
     "collect_all",
     "PLATFORM_COLLECTORS",
 ]
