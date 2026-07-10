@@ -211,6 +211,7 @@ Gives you the search queries that bring people to your site and which pages they
    ```
 4. Labels (`primary`, `secondary`, whatever you call them) are yours to choose — the collector groups everything by label.
 5. Checkout session metadata is preserved intact so you can classify sales by whatever product/cohort/tag scheme you use.
+6. `stripe_since_days` (default 60) sets how far back Stripe data is pulled when no `--months` lookback is given, so month-to-date and recent activity are covered. Set `0` to fall back to the collector's 14-day default.
 
 ---
 

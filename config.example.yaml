@@ -99,6 +99,12 @@ vercel_team_id:                        # Team ID if the project is in a team (op
 #
 # The collector preserves checkout session metadata intact so downstream
 # analysis can classify sales by whatever product/cohort scheme you use.
+#
+# stripe_since_days: how far back to pull Stripe data when no global --months
+# lookback is given. Default 60, so month-to-date and recent activity are
+# covered (the collector's own fallback is only 14 days). Set 0 to use that
+# 14-day fallback instead.
+# stripe_since_days: 60
 
 # --- Content strategy ---
 # primary_focus: the metric or outcome you care about most. Claude uses this to frame
