@@ -20,7 +20,15 @@ def _all_pages(
     endpoint: str,
     params: dict[str, Any],
 ) -> list[dict] | None:
-    """Paginate a Stripe list endpoint. Returns None on failure, [] on empty."""
+    """
+    Paginate a Stripe list endpoint.
+
+    Returns:
+      - list of items on success (possibly empty)
+      - partial list if a mid-pagination page fails (with a warning) so a
+        transient 5xx on page 3 of 10 doesn't discard the first two pages
+      - None only when the very first page fails
+    """
     out: list[dict] = []
     starting_after: str | None = None
     while True:
@@ -33,6 +41,12 @@ def _all_pages(
                 "Stripe %s failed: HTTP %s — %s",
                 endpoint, r.status_code, r.text[:200],
             )
+            if out:
+                logger.warning(
+                    "Stripe %s: returning %d partial results from earlier pages",
+                    endpoint, len(out),
+                )
+                return out
             return None
         payload = r.json()
         batch = payload.get("data", [])
@@ -81,21 +95,33 @@ def _collect_one_account(
     paid_sessions = [s for s in sessions if s.get("payment_status") == "paid"]
     paid_invoices = [i for i in invoices if i.get("status") == "paid"]
 
-    # Monthly rollup by charge date
+    # Aggregate in USD only. Multi-currency rollups would garble totals
+    # (adding EUR cents to USD cents), so non-USD charges are excluded
+    # from monthly/gross/refunded with a warning. Individual per-session
+    # and per-invoice records preserve their own currency for downstream.
+    def _is_usd(c: dict) -> bool:
+        return (c.get("currency") or "usd").lower() == "usd"
+
+    succeeded_usd = [c for c in succeeded if _is_usd(c)]
+    non_usd = sorted({(c.get("currency") or "").lower() for c in succeeded if not _is_usd(c)})
+    if non_usd:
+        logger.warning(
+            "Stripe [%s]: excluded %d non-USD succeeded charge(s) from aggregation "
+            "(currencies: %s). USD-only until multi-currency rollup is supported.",
+            label, len(succeeded) - len(succeeded_usd), ", ".join(non_usd),
+        )
+
+    # Monthly rollup by charge date (USD-only)
     monthly: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "gross_cents": 0})
-    for c in succeeded:
+    for c in succeeded_usd:
         m = datetime.fromtimestamp(c["created"], tz=timezone.utc).strftime("%Y-%m")
         monthly[m]["count"] += 1
         monthly[m]["gross_cents"] += c.get("amount", 0) or 0
 
-    # Default currency (best-effort — first non-empty)
-    currency = next(
-        (c.get("currency") for c in succeeded if c.get("currency")),
-        "usd",
-    )
+    currency = "usd"
 
-    gross_cents = sum((c.get("amount") or 0) for c in succeeded)
-    refunded_cents = sum((c.get("amount_refunded") or 0) for c in charges)
+    gross_cents = sum((c.get("amount") or 0) for c in succeeded_usd)
+    refunded_cents = sum((c.get("amount_refunded") or 0) for c in charges if _is_usd(c))
 
     # Slim per-session records — preserve metadata for downstream classification
     session_records = []
@@ -141,7 +167,7 @@ def _collect_one_account(
         "since": _iso(since),
         "currency": currency,
         "products": product_records,
-        "charges_succeeded": len(succeeded),
+        "charges_succeeded": len(succeeded_usd),
         "gross_cents": gross_cents,
         "refunded_cents": refunded_cents,
         "monthly": [
@@ -182,6 +208,11 @@ def collect_stripe(
     All classification (which sales count as which product) is intentionally
     left to downstream analysis — this collector preserves checkout metadata
     intact so any project can filter/group by its own rules.
+
+    Currency: gross/monthly/refunded aggregates are USD-only. Non-USD
+    succeeded charges are excluded from those rollups with a warning; the
+    individual charge / session / invoice records preserve their own
+    currency for downstream inspection.
     """
     if not tokens:
         return None
