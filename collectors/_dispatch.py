@@ -48,6 +48,9 @@ def _resolve_stripe_tokens(config: dict) -> dict[str, str]:
     return tokens
 
 
+_STRIPE_SINCE_MAX_DAYS = 3650  # 10 years — generous ceiling, guards against OverflowError
+
+
 def _stripe_since(config: dict, since: datetime | None) -> datetime | None:
     """
     Resolve the Stripe lookback window.
@@ -57,8 +60,12 @@ def _stripe_since(config: dict, since: datetime | None) -> datetime | None:
     recent activity are covered — the collector's own 14-day default is too
     short for monthly rollups, and Stripe history is cheap to over-fetch.
 
-    A non-positive ``stripe_since_days`` falls back to the collector's internal
-    default (returns None).
+    - A non-positive ``stripe_since_days`` (0, negative) falls back to the
+      collector's internal default (returns None).
+    - Malformed values (None, non-numeric strings) also fall back to the
+      60-day default.
+    - Very large values are clamped to a 10-year ceiling so a runaway config
+      value can't raise ``OverflowError`` inside ``timedelta``.
     """
     if since is not None:
         return since
@@ -69,6 +76,7 @@ def _stripe_since(config: dict, since: datetime | None) -> datetime | None:
         days = 60
     if days <= 0:
         return None
+    days = min(days, _STRIPE_SINCE_MAX_DAYS)
     return datetime.now(timezone.utc) - timedelta(days=days)
 
 

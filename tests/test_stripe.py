@@ -94,6 +94,42 @@ class TestStripeSince:
         after = datetime.now(timezone.utc) - timedelta(days=60)
         assert before <= got <= after
 
+    def test_explicit_none_falls_back_to_60(self):
+        # int(None) raises TypeError → caught → default 60
+        before = datetime.now(timezone.utc) - timedelta(days=60)
+        got = _stripe_since({"stripe_since_days": None}, None)
+        after = datetime.now(timezone.utc) - timedelta(days=60)
+        assert before <= got <= after
+
+    def test_numeric_string_used(self):
+        # "90" is a valid int() input → treated as 90 days
+        before = datetime.now(timezone.utc) - timedelta(days=90)
+        got = _stripe_since({"stripe_since_days": "90"}, None)
+        after = datetime.now(timezone.utc) - timedelta(days=90)
+        assert before <= got <= after
+
+    def test_float_value_truncated_to_int(self):
+        # int(60.9) == 60, standard Python truncation
+        before = datetime.now(timezone.utc) - timedelta(days=60)
+        got = _stripe_since({"stripe_since_days": 60.9}, None)
+        after = datetime.now(timezone.utc) - timedelta(days=60)
+        assert before <= got <= after
+
+    def test_sub_one_float_truncates_to_zero_and_returns_none(self):
+        # int(0.5) == 0 → non-positive branch → None. Documented foot-gun.
+        assert _stripe_since({"stripe_since_days": 0.5}, None) is None
+
+    def test_huge_value_clamped_to_ceiling(self):
+        # 10 ** 8 days would overflow timedelta; must clamp, not crash.
+        got = _stripe_since({"stripe_since_days": 10 ** 8}, None)
+        assert got is not None
+        # Result is clamped to ~10 years back — never further
+        assert got > datetime.now(timezone.utc) - timedelta(days=3651)
+
+    def test_returns_tz_aware_datetime(self):
+        got = _stripe_since({}, None)
+        assert got is not None and got.tzinfo is not None
+
 
 # ---------------------------------------------------------------------------
 # collect_stripe
