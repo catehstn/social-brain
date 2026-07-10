@@ -229,6 +229,14 @@ def _platform_expected(name: str, config: dict) -> bool:
         return _has_files("oreilly_drops/*.eml", "oreilly_drops/*.rtf")
     if name == "calendly":
         return bool(config.get("calendly_token"))
+    if name == "stripe":
+        if isinstance(config.get("stripe_tokens"), dict) and any(config["stripe_tokens"].values()):
+            return True
+        return any(
+            k.startswith("stripe_token_") and v
+            for k, v in config.items()
+            if isinstance(k, str)
+        )
     return False
 
 
@@ -268,6 +276,17 @@ def _platform_summary(name: str, data: dict) -> str:
             if lead is not None:
                 return f"{bookings} booking(s) ({lead} lead gen)"
             return f"{bookings} booking(s)"
+        if name == "stripe":
+            totals = data.get("totals", {})
+            accts = data.get("accounts", {}) or {}
+            gross = (totals.get("gross_cents") or 0) / 100
+            n = totals.get("charges_succeeded") or 0
+            currency = "USD"
+            for a in accts.values():
+                if a.get("currency"):
+                    currency = a["currency"].upper()
+                    break
+            return f"{n} charge(s), {currency} {gross:,.2f} across {len(accts)} account(s)"
         if name == "mentions":
             sources = data.get("sources", {})
             hn = len(sources.get("hackernews", []))

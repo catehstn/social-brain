@@ -196,6 +196,22 @@ Gives you the search queries that bring people to your site and which pages they
 4. Set `gsc_credentials_file: /path/to/service-account.json` in `config.yaml`
 5. Install extra dependencies: `pip install google-api-python-client google-auth`
 
+**Stripe** (sales — supports multiple accounts)
+1. In the Stripe dashboard → Developers → API keys → **Create restricted key**
+2. Give it **Read** on: Charges, Payment Intents, Checkout Sessions, Invoices, Customers, Balance transactions, Products
+3. Add to `config.yaml` — two shapes are supported:
+   ```yaml
+   # Preferred for many accounts:
+   stripe_tokens:
+     primary: rk_live_YOUR_KEY_HERE
+     secondary: rk_live_YOUR_OTHER_KEY_HERE
+
+   # Or flat keys — any config key starting with stripe_token_ becomes one account:
+   stripe_token_primary: rk_live_YOUR_KEY_HERE
+   ```
+4. Labels (`primary`, `secondary`, whatever you call them) are yours to choose — the collector groups everything by label.
+5. Checkout session metadata is preserved intact so you can classify sales by whatever product/cohort/tag scheme you use.
+
 ---
 
 ### Optional add-ons (extend existing credentials)
