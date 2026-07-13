@@ -352,6 +352,10 @@ def _process_stripe(collected: dict, sheets: dict, store_path: Path, now: str) -
                 "created": i.get("created", ""),
                 "amount_paid_cents": i.get("amount_paid_cents") or 0,
                 "currency": (i.get("currency") or "").upper() or currency,
+                "attempt_count": i.get("attempt_count", 0) or 0,
+                "paid_out_of_band": bool(i.get("paid_out_of_band", False)),
+                "collection_method": i.get("collection_method") or "",
+                "billing_reason": i.get("billing_reason") or "",
                 "lines_json": _json.dumps(i.get("lines") or [], sort_keys=True),
                 "last_updated": now,
             })

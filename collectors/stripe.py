@@ -135,7 +135,18 @@ def _collect_one_account(
             "customer_email": (s.get("customer_details") or {}).get("email"),
         })
 
-    # Invoice records with line-item descriptions preserved
+    # Invoice records with line-item descriptions preserved.
+    #
+    # Payment signals — critical for downstream deduping. Two invoices can both
+    # be `status="paid"` but only one actually moved money:
+    #   - `attempt_count >= 1` — Stripe successfully charged via this invoice
+    #   - `paid_out_of_band = True` — marked paid manually (bank transfer, etc.)
+    # A "record invoice" auto-created for a checkout session that already paid
+    # has `attempt_count == 0` and `paid_out_of_band = False` — no money moved
+    # through the invoice; the checkout session is already counted elsewhere.
+    # `collection_method` (charge_automatically / send_invoice) and
+    # `billing_reason` (manual / subscription_create / …) preserved for extra
+    # downstream filtering.
     invoice_records = []
     for i in paid_invoices:
         invoice_records.append({
@@ -143,6 +154,10 @@ def _collect_one_account(
             "created": i.get("created"),
             "amount_paid_cents": i.get("amount_paid"),
             "currency": i.get("currency"),
+            "attempt_count": i.get("attempt_count", 0),
+            "paid_out_of_band": bool(i.get("paid_out_of_band", False)),
+            "collection_method": i.get("collection_method"),
+            "billing_reason": i.get("billing_reason"),
             "lines": [
                 {
                     "description": li.get("description"),

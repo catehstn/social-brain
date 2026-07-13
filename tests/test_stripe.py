@@ -176,6 +176,8 @@ class TestCollectStripe:
             return_value=httpx.Response(200, json=_paginated([
                 {"id": "in_1", "status": "paid", "amount_paid": 449500,
                  "currency": "usd", "created": 1741000000,
+                 "attempt_count": 1, "paid_out_of_band": False,
+                 "collection_method": "send_invoice", "billing_reason": "manual",
                  "lines": {"data": [
                      {"description": "Course A Enrollment", "amount": 449500},
                  ]}},
@@ -195,9 +197,14 @@ class TestCollectStripe:
         # sessions: only paid ones flow through
         assert len(acct["paid_sessions"]) == 1
         assert acct["paid_sessions"][0]["metadata"]["courseName"] == "Course A"
-        # invoice
+        # invoice — line items + payment signals preserved
         assert len(acct["paid_invoices"]) == 1
-        assert acct["paid_invoices"][0]["lines"][0]["description"] == "Course A Enrollment"
+        inv = acct["paid_invoices"][0]
+        assert inv["lines"][0]["description"] == "Course A Enrollment"
+        assert inv["attempt_count"] == 1
+        assert inv["paid_out_of_band"] is False
+        assert inv["collection_method"] == "send_invoice"
+        assert inv["billing_reason"] == "manual"
         # totals rollup
         assert result["totals"]["gross_cents"] == 74850
 
@@ -381,6 +388,47 @@ class TestCollectStripe:
         assert monthly["2026-02"]["count"] == 1
         assert monthly["2026-02"]["gross_cents"] == 3000
 
+    def test_invoice_signals_distinguish_record_from_real(self, respx_mock):
+        """A paid record-invoice (attempt_count=0) and a real invoiced sale
+        (attempt_count>=1) both have status='paid', but must be distinguishable
+        downstream. Collector preserves attempt_count + paid_out_of_band so
+        consumers can filter."""
+        respx_mock.get(f"{STRIPE}/products").mock(
+            return_value=httpx.Response(200, json=_products_response([]))
+        )
+        respx_mock.get(f"{STRIPE}/charges").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/checkout/sessions").mock(
+            return_value=httpx.Response(200, json=_paginated([]))
+        )
+        respx_mock.get(f"{STRIPE}/invoices").mock(
+            return_value=httpx.Response(200, json=_paginated([
+                # Record invoice: created for a checkout session that already paid
+                {"id": "in_record", "status": "paid", "amount_paid": 49900,
+                 "currency": "usd", "created": 1741000000,
+                 "attempt_count": 0, "paid_out_of_band": False,
+                 "collection_method": "send_invoice", "billing_reason": "manual",
+                 "lines": {"data": [{"description": "Course A", "amount": 49900}]}},
+                # Real invoice: money actually collected via the invoice
+                {"id": "in_real", "status": "paid", "amount_paid": 404600,
+                 "currency": "usd", "created": 1741100000,
+                 "attempt_count": 1, "paid_out_of_band": False,
+                 "collection_method": "send_invoice", "billing_reason": "manual",
+                 "lines": {"data": [{"description": "Team deal", "amount": 404600}]}},
+            ]))
+        )
+        result = collect_stripe({"primary": "rk"}, since=SINCE)
+        invoices = {i["id"]: i for i in result["accounts"]["primary"]["paid_invoices"]}
+        assert invoices["in_record"]["attempt_count"] == 0
+        assert invoices["in_real"]["attempt_count"] == 1
+        # Downstream filter: money actually moved through the invoice
+        real_only = [
+            i for i in result["accounts"]["primary"]["paid_invoices"]
+            if i["attempt_count"] >= 1 or i["paid_out_of_band"]
+        ]
+        assert [i["id"] for i in real_only] == ["in_real"]
+
 
 # ---------------------------------------------------------------------------
 # Store persistence
@@ -405,6 +453,8 @@ class TestProcessStripe:
                     "paid_invoices": [
                         {"id": "in_1", "created": 1741000000,
                          "amount_paid_cents": 449500, "currency": "usd",
+                         "attempt_count": 1, "paid_out_of_band": False,
+                         "collection_method": "send_invoice", "billing_reason": "manual",
                          "lines": [{"description": "Course A", "amount_cents": 449500}]},
                     ],
                     "products": [
@@ -422,7 +472,12 @@ class TestProcessStripe:
         assert len(sheets["stripe_monthly"]) == 2
         assert sheets["stripe_sessions"].iloc[0]["session_id"] == "cs_1"
         assert "courseName" in sheets["stripe_sessions"].iloc[0]["metadata_json"]
-        assert sheets["stripe_invoices"].iloc[0]["invoice_id"] == "in_1"
+        inv_row = sheets["stripe_invoices"].iloc[0]
+        assert inv_row["invoice_id"] == "in_1"
+        assert inv_row["attempt_count"] == 1
+        assert bool(inv_row["paid_out_of_band"]) is False
+        assert inv_row["collection_method"] == "send_invoice"
+        assert inv_row["billing_reason"] == "manual"
         assert sheets["stripe_products"].iloc[0]["name"] == "Course A"
 
     def test_empty_accounts_writes_nothing(self, tmp_path):
