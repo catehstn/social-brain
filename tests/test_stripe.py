@@ -429,6 +429,17 @@ class TestCollectStripe:
         ]
         assert [i["id"] for i in real_only] == ["in_real"]
 
+    def test_discount_code_extraction(self):
+        from collectors.stripe import _discount_code
+        assert _discount_code({}) is None
+        assert _discount_code({"discounts": []}) is None
+        # coupon but no promotion code -> None
+        assert _discount_code({"discounts": [{"coupon": "c_1"}]}) is None
+        # unexpanded promotion_code id (a string) -> None
+        assert _discount_code({"discounts": [{"promotion_code": "promo_123"}]}) is None
+        # expanded promotion code -> the human code
+        assert _discount_code({"discounts": [{"promotion_code": {"code": "PARTNER10"}}]}) == "PARTNER10"
+
 
 # ---------------------------------------------------------------------------
 # Store persistence
@@ -448,7 +459,7 @@ class TestProcessStripe:
                     "paid_sessions": [
                         {"id": "cs_1", "created": 1740000000, "amount_cents": 49900,
                          "currency": "usd", "metadata": {"courseName": "A"},
-                         "customer_email": "x@y.com"},
+                         "customer_email": "x@y.com", "discount_code": "PARTNER10"},
                     ],
                     "paid_invoices": [
                         {"id": "in_1", "created": 1741000000,
@@ -472,6 +483,7 @@ class TestProcessStripe:
         assert len(sheets["stripe_monthly"]) == 2
         assert sheets["stripe_sessions"].iloc[0]["session_id"] == "cs_1"
         assert "courseName" in sheets["stripe_sessions"].iloc[0]["metadata_json"]
+        assert sheets["stripe_sessions"].iloc[0]["discount_code"] == "PARTNER10"
         inv_row = sheets["stripe_invoices"].iloc[0]
         assert inv_row["invoice_id"] == "in_1"
         assert inv_row["attempt_count"] == 1
@@ -506,15 +518,3 @@ class TestProcessStripe:
         _process_stripe(collected, sheets, store_path, "2026-07-10 12:00:00")
         rows = sheets["stripe_monthly"]
         assert set(rows["account"]) == {"a", "b"}
-
-
-def test_discount_code_extraction():
-    from collectors.stripe import _discount_code
-    assert _discount_code({}) is None
-    assert _discount_code({"discounts": []}) is None
-    # coupon but no promotion code -> None
-    assert _discount_code({"discounts": [{"coupon": "c_1"}]}) is None
-    # unexpanded promotion_code id (a string) -> None
-    assert _discount_code({"discounts": [{"promotion_code": "promo_123"}]}) is None
-    # expanded promotion code -> the human code
-    assert _discount_code({"discounts": [{"promotion_code": {"code": "PARTNER10"}}]}) == "PARTNER10"
