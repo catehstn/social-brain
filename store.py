@@ -342,6 +342,7 @@ def _process_stripe(collected: dict, sheets: dict, store_path: Path, now: str) -
                 "amount_cents": s.get("amount_cents") or 0,
                 "currency": (s.get("currency") or "").upper() or currency,
                 "customer_email": s.get("customer_email") or "",
+                "discount_code": s.get("discount_code") or "",
                 "metadata_json": _json.dumps(s.get("metadata") or {}, sort_keys=True),
                 "last_updated": now,
             })

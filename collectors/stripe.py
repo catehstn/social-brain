@@ -57,6 +57,19 @@ def _all_pages(
     return out
 
 
+def _discount_code(session: dict) -> str | None:
+    """Human-facing promotion code used at checkout, if any.
+
+    Reads the checkout session's expanded ``discounts[].promotion_code.code``.
+    Returns None when no promo code was applied (or it wasn't expanded).
+    """
+    for d in session.get("discounts") or []:
+        pc = d.get("promotion_code")
+        if isinstance(pc, dict) and pc.get("code"):
+            return pc["code"]
+    return None
+
+
 def _collect_one_account(
     label: str,
     token: str,
@@ -79,7 +92,10 @@ def _collect_one_account(
         )
         sessions = _all_pages(
             client, auth, "checkout/sessions",
-            {"limit": 100, "created[gte]": since_ts},
+            # Expand the promotion code so we can capture the human-facing code
+            # used at checkout (a referral signal), not just the ID.
+            {"limit": 100, "created[gte]": since_ts,
+             "expand[]": "data.discounts.promotion_code"},
         )
         # Invoices need an extra scope — soft-fail
         invoices = _all_pages(
@@ -133,6 +149,7 @@ def _collect_one_account(
             "currency": s.get("currency"),
             "metadata": s.get("metadata") or {},
             "customer_email": (s.get("customer_details") or {}).get("email"),
+            "discount_code": _discount_code(s),
         })
 
     # Invoice records with line-item descriptions preserved.
