@@ -506,3 +506,15 @@ class TestProcessStripe:
         _process_stripe(collected, sheets, store_path, "2026-07-10 12:00:00")
         rows = sheets["stripe_monthly"]
         assert set(rows["account"]) == {"a", "b"}
+
+
+def test_discount_code_extraction():
+    from collectors.stripe import _discount_code
+    assert _discount_code({}) is None
+    assert _discount_code({"discounts": []}) is None
+    # coupon but no promotion code -> None
+    assert _discount_code({"discounts": [{"coupon": "c_1"}]}) is None
+    # unexpanded promotion_code id (a string) -> None
+    assert _discount_code({"discounts": [{"promotion_code": "promo_123"}]}) is None
+    # expanded promotion code -> the human code
+    assert _discount_code({"discounts": [{"promotion_code": {"code": "PARTNER10"}}]}) == "PARTNER10"
