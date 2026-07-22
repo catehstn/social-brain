@@ -17,8 +17,8 @@ import {
   blogDaily,
   linkedinDaily,
   mastodonPosts,
-  vercelDaily,
-  vercelReferrers,
+  posthogDaily,
+  posthogReferrers,
   blogTopPosts,
   amazonBooks,
   newsletterIssues,
@@ -355,7 +355,7 @@ export default function Dashboard() {
           <Section title="Daily Traffic" note="across tracked sites">
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "16px 8px" }}>
               <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={vercelDaily} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+                <BarChart data={posthogDaily} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
                   <XAxis dataKey="d" tick={{ fontSize: 10, fill: C.muted }} tickLine={false} axisLine={false} />
                   <YAxis tick={{ fontSize: 10, fill: C.muted }} tickLine={false} axisLine={false} width={30} />
@@ -368,15 +368,15 @@ export default function Dashboard() {
 
           <Section title="Top Referrers">
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-              {vercelReferrers.map((r, i) => (
+              {posthogReferrers.map((r, i) => (
                 <div key={i} style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "10px 16px",
-                  borderBottom: i < vercelReferrers.length - 1 ? `1px solid ${C.border}` : "none",
+                  borderBottom: i < posthogReferrers.length - 1 ? `1px solid ${C.border}` : "none",
                 }}>
                   <div style={{ flex: 1, fontSize: 13, color: i === 0 ? C.accent : C.text }}>{r.name}</div>
                   <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono',monospace", color: i === 0 ? C.accent : C.textDim, minWidth: 30, textAlign: "right" }}>{r.pv}</div>
                   <div style={{ width: 80, height: 5, background: C.border, borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ height: "100%", background: i === 0 ? C.accent : C.accent2, width: `${(r.pv / vercelReferrers[0].pv) * 100}%`, borderRadius: 3 }} />
+                    <div style={{ height: "100%", background: i === 0 ? C.accent : C.accent2, width: `${(r.pv / posthogReferrers[0].pv) * 100}%`, borderRadius: 3 }} />
                   </div>
                 </div>
               ))}

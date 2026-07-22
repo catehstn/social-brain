@@ -57,11 +57,14 @@ monitored_domains:
 # Personal access token from buffer.com/manage/apps-and-extras/apps
 buffer_token: YOUR_BUFFER_TOKEN
 
-# --- Vercel Web Analytics (optional) ---
-# Leave blank to skip Vercel collection.
-vercel_token: YOUR_VERCEL_TOKEN        # Vercel account token (Settings → Tokens)
-vercel_project_id: your-project-slug  # Project name/slug (shown in the URL, e.g. "my-app")
-vercel_team_id:                        # Team ID if the project is in a team (optional)
+# --- PostHog Web Analytics (optional) ---
+# Leave blank to skip PostHog collection.
+# Requires the PostHog snippet installed on the site you want to measure.
+# Create a Personal API Key at Settings → Personal API Keys with the "query:read"
+# scope; find the Project ID at Settings → Project.
+posthog_api_key:                              # phx_... personal API key
+posthog_project_id:                           # numeric project id
+posthog_host: https://us.i.posthog.com        # US cloud (default). Use https://eu.i.posthog.com for EU.
 
 # --- GoatCounter (optional) ---
 # goatcounter_site: what-raccoon   # the subdomain part of yoursite.goatcounter.com

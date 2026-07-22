@@ -141,12 +141,12 @@ def _trim_data(data: dict[str, Any], months: int | None = None) -> dict[str, Any
         email.pop("body", None)
         email.pop("id", None)
 
-    # Vercel: keep most recent 30 days if period is long
-    if "vercel" in data:
-        daily = data["vercel"].get("daily_views", [])
+    # PostHog: keep most recent 30 days if period is long
+    if "posthog" in data:
+        daily = data["posthog"].get("daily", [])
         if len(daily) > 30:
-            data["vercel"]["daily_views"] = daily[-30:]
-            data["vercel"]["daily_views_note"] = f"Showing most recent 30 of {len(daily)} days"
+            data["posthog"]["daily"] = daily[-30:]
+            data["posthog"]["daily_note"] = f"Showing most recent 30 of {len(daily)} days"
 
     # Upcoming: truncate WordPress post content (can be very long)
     for post in data.get("upcoming", {}).get("sources", {}).get("wordpress", []):

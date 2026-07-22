@@ -4,7 +4,7 @@ from collectors.buttondown import collect_buttondown, _collect_buttondown_newsle
 from collectors.jetpack import collect_jetpack
 from collectors.linkedin import collect_linkedin, _parse_linkedin_csv, _parse_linkedin_xlsx, _LINKEDIN_COLUMN_MAP, _fetch_linkedin_post_text
 from collectors.substack import collect_substack
-from collectors.vercel import collect_vercel
+from collectors.posthog import collect_posthog
 from collectors.amazon import collect_amazon, _scrape_amazon_asin, _AMAZON_HEADERS
 from collectors.upcoming import collect_upcoming
 from collectors.mentions import collect_mentions
@@ -26,7 +26,7 @@ __all__ = [
     "_LINKEDIN_COLUMN_MAP",
     "_fetch_linkedin_post_text",
     "collect_substack",
-    "collect_vercel",
+    "collect_posthog",
     "collect_amazon",
     "_scrape_amazon_asin",
     "_AMAZON_HEADERS",
