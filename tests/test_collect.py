@@ -917,23 +917,32 @@ class TestCollectAmazon:
 class TestCollectPosthog:
     HOST = "https://us.i.posthog.com"
     URL = f"{HOST}/api/projects/42/query/"
+    FILTER = "www.example.com"
 
     def _mock_all(self, respx_mock,
                   overview=(1000, 800),
                   daily=((["2026-03-01", 500, 400], ["2026-03-02", 500, 400])),
                   top_pages=((["/", 300, 250],)),
-                  top_refs=((["cate.blog", 120],))):
-        # All four HogQL calls hit the same POST URL. Return them in order.
-        respx_mock.post(self.URL).mock(side_effect=[
+                  top_refs=((["cate.blog", 120],)),
+                  distinct_hosts=None):
+        """
+        Mock the four core HogQL calls, plus an optional fifth distinct-hosts
+        diagnostic (fired only when no host_filter is set).
+        """
+        responses = [
             httpx.Response(200, json={"results": [list(overview)]}),
             httpx.Response(200, json={"results": [list(r) for r in daily]}),
             httpx.Response(200, json={"results": [list(r) for r in top_pages]}),
             httpx.Response(200, json={"results": [list(r) for r in top_refs]}),
-        ])
+        ]
+        if distinct_hosts is not None:
+            responses.append(httpx.Response(200, json={"results": distinct_hosts}))
+        respx_mock.post(self.URL).mock(side_effect=responses)
 
     def test_happy_path(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_posthog("phx_key", "42", host=self.HOST, since=SINCE)
+        result = collect_posthog("phx_key", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
         assert result is not None
         assert result["platform"] == "posthog"
         assert result["page_views"] == 1000
@@ -942,10 +951,12 @@ class TestCollectPosthog:
         assert result["daily"][0] == {"date": "2026-03-01", "page_views": 500, "visitors": 400}
         assert result["top_pages"][0] == {"path": "/", "page_views": 300, "visitors": 250}
         assert result["top_referrers"][0] == {"referrer": "cate.blog", "page_views": 120}
+        assert result["host_filter"] == [self.FILTER]
 
     def test_overview_failure_returns_none(self, respx_mock):
         respx_mock.post(self.URL).mock(return_value=httpx.Response(401, text="unauthorised"))
-        result = collect_posthog("bad_key", "42", host=self.HOST, since=SINCE)
+        result = collect_posthog("bad_key", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
         assert result is None
 
     def test_daily_failure_returns_empty_list(self, respx_mock):
@@ -955,7 +966,8 @@ class TestCollectPosthog:
             httpx.Response(200, json={"results": []}),
             httpx.Response(200, json={"results": []}),
         ])
-        result = collect_posthog("k", "42", host=self.HOST, since=SINCE)
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
         assert result is not None
         assert result["page_views"] == 100
         assert result["daily"] == []
@@ -969,23 +981,109 @@ class TestCollectPosthog:
                 httpx.Response(200, json={"results": []}),            # top_referrers
             ]
         )
-        result = collect_posthog("k", "42", since=SINCE)
+        result = collect_posthog("k", "42", since=SINCE, host_filter=self.FILTER)
         assert result is not None
         assert result["page_views"] == 0
 
     def test_empty_results_still_valid(self, respx_mock):
-        respx_mock.post(self.URL).mock(side_effect=[
-            httpx.Response(200, json={"results": [[0, 0]]}),
-            httpx.Response(200, json={"results": []}),
-            httpx.Response(200, json={"results": []}),
-            httpx.Response(200, json={"results": []}),
-        ])
-        result = collect_posthog("k", "42", host=self.HOST, since=SINCE)
+        self._mock_all(respx_mock, overview=(0, 0), daily=(), top_pages=(), top_refs=())
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
         assert result["page_views"] == 0
         assert result["visitors"] == 0
         assert result["daily"] == []
         assert result["top_pages"] == []
         assert result["top_referrers"] == []
+
+    # --- host_filter behaviour -----------------------------------------
+
+    def test_host_filter_injected_into_queries(self, respx_mock):
+        """When host_filter is set, every query body must include the filter."""
+        route = respx_mock.post(self.URL).mock(side_effect=[
+            httpx.Response(200, json={"results": [[10, 5]]}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+        ])
+        collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                        host_filter="www.example.com")
+        # respx captures each call in .calls; check each request body includes the filter clause
+        for call in route.calls:
+            body = call.request.content.decode()
+            assert "properties.$host = 'www.example.com'" in body
+
+    def test_host_filter_list(self, respx_mock):
+        respx_mock.post(self.URL).mock(side_effect=[
+            httpx.Response(200, json={"results": [[10, 5]]}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+        ])
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=["www.a.com", "www.b.com"])
+        assert result["host_filter"] == ["www.a.com", "www.b.com"]
+
+    def test_invalid_host_filter_dropped(self, respx_mock, caplog):
+        """Values that aren't plain hostnames are dropped with a warning."""
+        respx_mock.post(self.URL).mock(side_effect=[
+            httpx.Response(200, json={"results": [[10, 5]]}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),  # distinct-hosts diagnostic
+        ])
+        with caplog.at_level("WARNING"):
+            result = collect_posthog(
+                "k", "42", host=self.HOST, since=SINCE,
+                host_filter=["www.good.com' OR 1=1--", ""],
+            )
+        # Both entries invalid → no filter applied
+        assert result["host_filter"] == []
+        assert any("invalid hostname" in m for m in [r.getMessage() for r in caplog.records])
+
+    def test_no_filter_multiple_hosts_warns(self, respx_mock, caplog):
+        """When no host_filter is set and multiple $host values exist, warn."""
+        self._mock_all(
+            respx_mock,
+            distinct_hosts=[["www.prod.com", 100], ["preview.vercel.app", 30]],
+        )
+        with caplog.at_level("WARNING"):
+            collect_posthog("k", "42", host=self.HOST, since=SINCE)
+        msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("no host_filter" in m and "preview.vercel.app" in m for m in msgs)
+
+    def test_no_filter_single_host_no_warning(self, respx_mock, caplog):
+        """No warning when there's genuinely only one host."""
+        self._mock_all(
+            respx_mock,
+            distinct_hosts=[["www.only.com", 500]],
+        )
+        with caplog.at_level("WARNING"):
+            collect_posthog("k", "42", host=self.HOST, since=SINCE)
+        assert not any("no host_filter" in m for m in [r.getMessage() for r in caplog.records])
+
+    # --- defensive parsing --------------------------------------------
+
+    def test_malformed_daily_row_skipped(self, respx_mock):
+        """A row that's too short must not crash the collector."""
+        self._mock_all(
+            respx_mock,
+            daily=([["2026-03-01", 500, 400], ["short"]]),
+        )
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
+        assert len(result["daily"]) == 1
+        assert result["daily"][0]["date"] == "2026-03-01"
+
+    def test_non_json_response_returns_none(self, respx_mock):
+        """A 200 with a non-JSON body (proxy error page) must not crash."""
+        respx_mock.post(self.URL).mock(return_value=httpx.Response(
+            200, content=b"<html>proxy 502 error</html>",
+            headers={"content-type": "text/html"},
+        ))
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -179,6 +179,7 @@ def collect_all(
                 str(posthog_project_id),
                 host=config.get("posthog_host") or None,
                 since=since,
+                host_filter=config.get("posthog_host_filter") or None,
             )
         elif name == "upcoming":
             jetpack_site = config.get("jetpack_site", "")

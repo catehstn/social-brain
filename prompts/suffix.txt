@@ -17,7 +17,7 @@ Data shape notes (for interpreting the JSON):
 - jetpack: daily_views, top_posts (views this period), referrers (traffic sources aggregated across the period, sorted by views), email_subscribers (current email subscriber count), wpcom_followers (current WordPress.com follower count)
 - buttondown: subscriber_counts per newsletter; newsletters list with open_rate, click_rate, unsubscribes per issue
 - substack: emails list with subject, date, recipients, opens, open_rate, likes, comments, shares, new_signups, new_subscribers per issue
-- posthog: daily (date/page_views/visitors per day), page_views, visitors, top_pages (path/page_views/visitors), top_referrers (referrer/page_views); source of web analytics for driyourcareer.com (replaces the retired Vercel Analytics)
+- posthog: daily (date/page_views/visitors per day), page_views, visitors, top_pages (path/page_views/visitors), top_referrers (referrer/page_views), host_filter (list of hostnames the counts are restricted to; empty = all hosts). Web analytics for your primary product/marketing site. Replaced the retired Vercel Analytics collector.
 - amazon: by_marketplace dict — each marketplace has a list of book editions with best_sellers_rank (lower = better; rank reflects relative popularity, not unit sales), rating, reviews
 - oreilly: payment_count, total_paid, currencies, payments (list of payment_date/amount/currency/line_items objects) — these are actual royalty payments representing real book sales revenue; use oreilly as the primary book sales signal, not amazon rank
 - upcoming: sources.wordpress (scheduled blog posts with title, date, content), sources.buttondown (scheduled emails), sources.buffer (queued social posts with platform, text, scheduled_at)
