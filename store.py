@@ -80,7 +80,7 @@ def get_known_platforms(store_path: Path = STORE_PATH) -> set[str]:
             "jetpack": "jetpack",
             "linkedin": "linkedin",
             "buttondown": "buttondown",
-            "vercel": "vercel",
+            "web_analytics": "posthog",
             "amazon": "amazon",
             "mentions": "mentions",
             "stripe": "stripe",
@@ -279,15 +279,24 @@ def _process_buttondown(collected: dict, sheets: dict, store_path: Path, now: st
         )
 
 
-def _process_vercel(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+def _process_posthog(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist PostHog daily rollup to `web_analytics_daily`, tagged with
+    source='posthog'. The sheet replaces the retired `vercel_daily` and
+    carries a `source` column so historical vercel rows (migrated in via
+    scripts/migrate_web_analytics.py) coexist with new posthog rows.
+    """
     daily = collected.get("daily", [])
     if daily:
         df_new = pd.DataFrame([{
             "date": d.get("date", ""),
+            "source": "posthog",
             "page_views": d.get("page_views", 0),
             "visitors": d.get("visitors", 0),
         } for d in daily if d.get("date")])
-        sheets["vercel_daily"] = _upsert(_load(store_path, "vercel_daily"), df_new, ["date"])
+        sheets["web_analytics_daily"] = _upsert(
+            _load(store_path, "web_analytics_daily"), df_new, ["date", "source"],
+        )
 
 
 def _process_amazon(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
@@ -462,7 +471,7 @@ _PROCESSORS = {
     "jetpack": _process_jetpack,
     "linkedin": _process_linkedin,
     "buttondown": _process_buttondown,
-    "vercel": _process_vercel,
+    "posthog": _process_posthog,
     "amazon": _process_amazon,
     "mentions": _process_mentions,
     "stripe": _process_stripe,

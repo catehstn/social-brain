@@ -103,12 +103,15 @@ Collects: total pageviews, unique visitors, and per-path breakdown (including cu
 
 Collects: booking counts grouped by event type with active vs. cancelled split, plus `lead_gen_bookings` if configured.
 
-**Vercel Web Analytics**
+**PostHog Web Analytics** (replaces the retired Vercel Analytics collector, 2026-07-22)
 
-Your project must have Web Analytics enabled. You need at least Member access on the team.
+Requires the PostHog JS snippet installed on the site you want to measure — see [posthog.com/docs/getting-started/install](https://posthog.com/docs/getting-started/install).
 
-1. [vercel.com/account/tokens](https://vercel.com/account/tokens) → Create token (Full Account scope)
-2. Set `vercel_token`, `vercel_project_id` (project slug from the URL), and `vercel_team_id` (from Team Settings → General, if applicable)
+1. PostHog dashboard → Settings → **Personal API Keys** → Create key with the `query:read` scope
+2. Settings → **Project** → copy the numeric Project ID
+3. Set `posthog_api_key`, `posthog_project_id`, and `posthog_host` (`https://us.i.posthog.com` for US cloud, `https://eu.i.posthog.com` for EU) in `config.yaml`
+
+Collects: total page views + unique visitors for the window, per-day rollup, top 50 pages (path / views / visitors), and top 20 referrers (excludes `$direct`). Data lands in `web_analytics_daily` sheet in the persistent store, with a `source` column so it can coexist with historical Vercel rows migrated via `scripts/migrate_web_analytics.py`.
 
 ---
 

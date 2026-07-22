@@ -211,8 +211,8 @@ def _platform_expected(name: str, config: dict) -> bool:
         return bool(config.get("linkedin_access_token")) or _has_files("linkedin_drops/*.csv", "linkedin_drops/*.xlsx")
     if name == "substack":
         return _has_files("substack_drops/*.csv")
-    if name == "vercel":
-        return bool(config.get("vercel_token") and config.get("vercel_project_id"))
+    if name == "posthog":
+        return bool(config.get("posthog_api_key") and config.get("posthog_project_id"))
     if name == "amazon":
         return bool(config.get("amazon_asins"))
     if name == "upcoming":
@@ -259,7 +259,7 @@ def _platform_summary(name: str, data: dict) -> str:
             return f"{days} days engagement, {posts} top posts"
         if name == "substack":
             return f"{len(data.get('emails', []))} emails"
-        if name == "vercel":
+        if name == "posthog":
             return f"{data.get('page_views', '?')} views"
         if name == "amazon":
             return f"{len(data.get('by_marketplace', {}))} marketplace(s)"

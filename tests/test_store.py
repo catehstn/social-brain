@@ -16,7 +16,7 @@ from store import (
     _process_jetpack,
     _process_linkedin,
     _process_buttondown,
-    _process_vercel,
+    _process_posthog,
     _process_amazon,
     _process_mentions,
 )
@@ -455,10 +455,11 @@ class TestProcessButtondown:
 
 
 # ---------------------------------------------------------------------------
-# _process_vercel
+# _process_posthog (replaces _process_vercel — writes to web_analytics_daily
+# with a source column so historical vercel rows can coexist post-migration)
 # ---------------------------------------------------------------------------
 
-class TestProcessVercel:
+class TestProcessPosthog:
     def _collected(self):
         return {
             "daily": [
@@ -467,31 +468,53 @@ class TestProcessVercel:
             ],
         }
 
-    def test_writes_daily_sheet(self, tmp_path):
+    def test_writes_web_analytics_sheet(self, tmp_path):
         sheets = {}
-        _process_vercel(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
-        assert "vercel_daily" in sheets
-        assert len(sheets["vercel_daily"]) == 2
+        _process_posthog(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "web_analytics_daily" in sheets
+        assert len(sheets["web_analytics_daily"]) == 2
+        assert set(sheets["web_analytics_daily"]["source"]) == {"posthog"}
 
-    def test_upserts_by_date(self, tmp_path):
+    def test_upserts_by_date_and_source(self, tmp_path):
         path = tmp_path / "s.xlsx"
         first = {"daily": [{"date": "2026-03-01", "page_views": 100, "visitors": 80}]}
         second = {"daily": [{"date": "2026-03-01", "page_views": 200, "visitors": 160}]}
         for collected in [first, second]:
             sheets = {}
-            _process_vercel(collected, sheets, path, NOW)
+            _process_posthog(collected, sheets, path, NOW)
             with pd.ExcelWriter(path, engine="openpyxl") as w:
                 for name, df in sheets.items():
                     df.to_excel(w, sheet_name=name, index=False)
-        result = _load(path, "vercel_daily")
+        result = _load(path, "web_analytics_daily")
         assert len(result) == 1
         assert int(result.iloc[0]["page_views"]) == 200
+        assert result.iloc[0]["source"] == "posthog"
+
+    def test_coexists_with_migrated_vercel_rows(self, tmp_path):
+        """A historical vercel row for the same date must survive a new posthog
+        write — the (date, source) key prevents accidental overwrite."""
+        path = tmp_path / "s.xlsx"
+        seed = pd.DataFrame([
+            {"date": "2026-03-01", "source": "vercel", "page_views": 999, "visitors": 500},
+        ])
+        with pd.ExcelWriter(path, engine="openpyxl") as w:
+            seed.to_excel(w, sheet_name="web_analytics_daily", index=False)
+        sheets = {}
+        _process_posthog(
+            {"daily": [{"date": "2026-03-01", "page_views": 100, "visitors": 80}]},
+            sheets, path, NOW,
+        )
+        rows = sheets["web_analytics_daily"]
+        assert len(rows) == 2
+        by_source = {r["source"]: r for _, r in rows.iterrows()}
+        assert int(by_source["vercel"]["page_views"]) == 999
+        assert int(by_source["posthog"]["page_views"]) == 100
 
     def test_entry_without_date_skipped(self, tmp_path):
         collected = {"daily": [{"page_views": 100, "visitors": 80}]}
         sheets = {}
-        _process_vercel(collected, sheets, tmp_path / "s.xlsx", NOW)
-        assert "vercel_daily" not in sheets or sheets["vercel_daily"].empty
+        _process_posthog(collected, sheets, tmp_path / "s.xlsx", NOW)
+        assert "web_analytics_daily" not in sheets or sheets["web_analytics_daily"].empty
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ from collectors.jetpack import collect_jetpack
 from collectors.linkedin import collect_linkedin
 from collectors.linkedin_api import collect_linkedin_api
 from collectors.substack import collect_substack
-from collectors.vercel import collect_vercel
+from collectors.posthog import collect_posthog
 from collectors.amazon import collect_amazon
 from collectors.upcoming import collect_upcoming
 from collectors.mentions import collect_mentions
@@ -87,7 +87,7 @@ PLATFORM_COLLECTORS = {
     "jetpack": "collect_jetpack",
     "linkedin": "collect_linkedin",
     "substack": "collect_substack",
-    "vercel": "collect_vercel",
+    "posthog": "collect_posthog",
     "amazon": "collect_amazon",
     "upcoming": "collect_upcoming",
     "mentions": "collect_mentions",
@@ -168,17 +168,18 @@ def collect_all(
                 asins,
                 marketplaces=config.get("amazon_marketplaces") or ["amazon.com", "amazon.co.uk"],
             )
-        elif name == "vercel":
-            vercel_token = config.get("vercel_token", "")
-            vercel_project_id = config.get("vercel_project_id", "")
-            if not vercel_token or not vercel_project_id:
-                logger.info("Vercel: vercel_token or vercel_project_id not configured — skipping")
+        elif name == "posthog":
+            posthog_api_key = config.get("posthog_api_key", "")
+            posthog_project_id = config.get("posthog_project_id", "")
+            if not posthog_api_key or not posthog_project_id:
+                logger.info("PostHog: posthog_api_key or posthog_project_id not configured — skipping")
                 return
-            data = collect_vercel(
-                vercel_token,
-                vercel_project_id,
-                team_id=config.get("vercel_team_id") or None,
+            data = collect_posthog(
+                posthog_api_key,
+                str(posthog_project_id),
+                host=config.get("posthog_host") or None,
                 since=since,
+                host_filter=config.get("posthog_host_filter") or None,
             )
         elif name == "upcoming":
             jetpack_site = config.get("jetpack_site", "")
