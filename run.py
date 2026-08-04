@@ -706,24 +706,37 @@ def main() -> None:
         # Persistent store — upsert into analytics.xlsx
         # ------------------------------------------------------------------
         if collected and not args.platform:
-            from store import update as store_update, get_known_platforms, STORE_PATH
+            import time as _time
+            from store import update as store_update, get_known_platforms, storable_platforms, STORE_PATH
 
+            # Only backfill for platforms we actually persist. Otherwise
+            # anything collected-but-not-stored (calendly, goatcounter,
+            # oreilly, upcoming) looks perpetually "new" and triggers a
+            # silent 3-month re-collect on every run — see #51.
+            # `mentions` is separately excluded: it IS persisted, but its
+            # sheets are named `hn_mentions`, `mastodon_mentions`, etc.,
+            # which `get_known_platforms` (prefix-based) can never detect,
+            # so it would also look perpetually new.
             known = get_known_platforms()
-            new_platforms = set(collected.keys()) - known - {"upcoming", "mentions"}
+            new_platforms = (set(collected.keys()) & storable_platforms()) - known - {"mentions"}
 
             if new_platforms and since is None:
-                # First time seeing these platforms — backfill 3 months
                 logger.info(
                     "Store: new platform(s) detected (%s) — backfilling 3 months",
                     ", ".join(sorted(new_platforms)),
                 )
                 backfill_since = datetime.now(timezone.utc) - timedelta(days=90)
+                t_backfill = _time.monotonic()
                 backfill = collect_all(
                     config,
                     platform=None,
                     since=backfill_since,
                 )
                 store_update(backfill)
+                logger.info(
+                    "Store: backfill complete (%.1fs)",
+                    _time.monotonic() - t_backfill,
+                )
             else:
                 store_update(collected)
 

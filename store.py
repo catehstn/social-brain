@@ -478,6 +478,11 @@ _PROCESSORS = {
 }
 
 
+def storable_platforms() -> set[str]:
+    """Platforms with a registered upsert handler — the ones that end up in analytics.xlsx."""
+    return set(_PROCESSORS.keys())
+
+
 def update(collected: dict[str, Any], store_path: Path = STORE_PATH) -> None:
     """
     Upsert all collected platform data into the persistent Excel store.

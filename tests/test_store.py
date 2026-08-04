@@ -10,6 +10,7 @@ from store import (
     _load,
     _upsert,
     get_known_platforms,
+    storable_platforms,
     update,
     _process_mastodon,
     _process_bluesky,
@@ -138,6 +139,26 @@ class TestGetKnownPlatforms:
         path.write_bytes(b"not an excel file")
         result = get_known_platforms(path)
         assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# storable_platforms
+# ---------------------------------------------------------------------------
+
+class TestStorablePlatforms:
+    def test_matches_registered_processors(self):
+        # Every entry must correspond to a real _process_* handler so callers
+        # can trust the set for backfill/detection logic (see #51).
+        expected = {
+            "mastodon", "bluesky", "jetpack", "linkedin", "buttondown",
+            "posthog", "amazon", "mentions", "stripe",
+        }
+        assert storable_platforms() == expected
+
+    def test_excludes_platforms_without_handler(self):
+        # These are collected but not persisted — must NOT be reported as storable.
+        for name in ("calendly", "goatcounter", "oreilly", "upcoming"):
+            assert name not in storable_platforms()
 
 
 # ---------------------------------------------------------------------------
