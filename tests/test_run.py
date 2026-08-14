@@ -15,11 +15,17 @@ import yaml
 
 import run
 from run import since_last_run
+from store import storable_platforms as _real_storable_platforms
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Mirror of store.storable_platforms() — cached at import so every store
+# MagicMock below returns the real set without depending on the actual module.
+_STORABLE = _real_storable_platforms()
+
 
 def _write_config(path: Path, data: dict) -> None:
     with path.open("w") as f:
@@ -306,12 +312,14 @@ def _setup_main(tmp_path, monkeypatch, argv: list[str]):
     """Patch paths and sys.argv; return a fake config file."""
     config_path = tmp_path / "config.yaml"
     data_dir = tmp_path / "data" / "weekly"
+    platform_dir = tmp_path / "data" / "platform"
     reports_dir = tmp_path / "reports"
     data_dir.mkdir(parents=True)
 
     _write_config(config_path, _minimal_config())
     monkeypatch.setattr(run, "CONFIG_PATH", config_path)
     monkeypatch.setattr(run, "DATA_DIR", data_dir)
+    monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
     monkeypatch.setattr(run, "REPORTS_DIR", reports_dir)
     monkeypatch.setattr(sys, "argv", ["run.py"] + argv)
     return data_dir, reports_dir
@@ -333,7 +341,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=mock_save_prompt),
         }):
             run.main()
@@ -348,7 +356,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -365,7 +373,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=mock_save_prompt),
         }):
             run.main()
@@ -382,7 +390,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=MagicMock()),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=mock_save_prompt),
         }):
             run.main()
@@ -397,7 +405,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -413,7 +421,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -432,13 +440,75 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
 
         assert mock_collect.call_count == 1
         mock_store_update.assert_called_once_with({"mastodon": {"posts": []}})
+
+    def test_non_storable_platform_never_triggers_backfill(self, tmp_path, monkeypatch):
+        # Regression for #51: platforms without a store handler (calendly,
+        # goatcounter, oreilly) were perpetually "new" and re-triggered a
+        # 3-month collect_all on every run.
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
+        collected = {
+            "mastodon": {"posts": []},
+            "calendly": {"events": []},
+            "goatcounter": {"stats": {}},
+            "oreilly": {"payments": []},
+        }
+        mock_collect = MagicMock(return_value=collected)
+        mock_store_update = MagicMock()
+        # mastodon is known; the three non-storable platforms are not — but
+        # they must not count as "new" for backfill purposes.
+        mock_get_known = MagicMock(return_value={"mastodon"})
+
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()
+
+        assert mock_collect.call_count == 1, "backfill fired for non-storable platforms"
+        mock_store_update.assert_called_once_with(collected)
+
+    def test_mentions_never_triggers_backfill(self, tmp_path, monkeypatch):
+        # Regression for #51: mentions IS persisted, but its sheets are
+        # prefixed `hn_`, `mastodon_`, `bluesky_`, `gsc_` — never `mentions_` —
+        # so get_known_platforms() (prefix-based) can never detect it as known.
+        # Must be excluded to avoid a perpetual backfill on every run.
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
+        collected = {"mastodon": {"posts": []}, "mentions": {"sources": {}}}
+        mock_collect = MagicMock(return_value=collected)
+        mock_get_known = MagicMock(return_value={"mastodon"})
+
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()
+
+        assert mock_collect.call_count == 1, "backfill fired for mentions"
+
+    def test_backfill_logs_completion(self, tmp_path, monkeypatch, caplog):
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
+        mock_collect = MagicMock(return_value={"mastodon": {"posts": []}})
+        mock_get_known = MagicMock(return_value=set())  # forces backfill
+
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            with caplog.at_level("INFO"):
+                run.main()
+
+        assert any("backfilling 3 months" in r.message for r in caplog.records)
+        assert any("backfill complete" in r.message for r in caplog.records)
 
     def test_months_flag_sets_since(self, tmp_path, monkeypatch):
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--months", "3", "--collect-only"])
@@ -447,7 +517,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -473,7 +543,7 @@ class TestMain:
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
             "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known,
-                               STORE_PATH=tmp_path / "analytics.xlsx"),
+                               storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -490,7 +560,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -700,7 +770,7 @@ class TestNonInteractiveStaleness:
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
             "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()),
-                               STORE_PATH=tmp_path / "analytics.xlsx"),
+                               storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()  # must not sys.exit()
@@ -736,7 +806,7 @@ class TestNonInteractiveStaleness:
             with patch.dict("sys.modules", {
                 "collect": MagicMock(collect_all=mock_collect),
                 "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()),
-                                   STORE_PATH=tmp_path / "analytics.xlsx"),
+                                   storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
                 "analyse": MagicMock(save_prompt=MagicMock()),
             }):
                 run.main()
