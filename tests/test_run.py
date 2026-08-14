@@ -312,12 +312,14 @@ def _setup_main(tmp_path, monkeypatch, argv: list[str]):
     """Patch paths and sys.argv; return a fake config file."""
     config_path = tmp_path / "config.yaml"
     data_dir = tmp_path / "data" / "weekly"
+    platform_dir = tmp_path / "data" / "platform"
     reports_dir = tmp_path / "reports"
     data_dir.mkdir(parents=True)
 
     _write_config(config_path, _minimal_config())
     monkeypatch.setattr(run, "CONFIG_PATH", config_path)
     monkeypatch.setattr(run, "DATA_DIR", data_dir)
+    monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
     monkeypatch.setattr(run, "REPORTS_DIR", reports_dir)
     monkeypatch.setattr(sys, "argv", ["run.py"] + argv)
     return data_dir, reports_dir
