@@ -82,6 +82,7 @@ def get_known_platforms(store_path: Path = STORE_PATH) -> set[str]:
             "buttondown": "buttondown",
             "web_analytics": "posthog",
             "amazon": "amazon",
+            "goatcounter": "goatcounter",
             "mentions": "mentions",
             "stripe": "stripe",
         }
@@ -392,6 +393,52 @@ def _process_stripe(collected: dict, sheets: dict, store_path: Path, now: str) -
         sheets["stripe_products"] = _upsert(_load(store_path, "stripe_products"), df, ["product_id", "account"])
 
 
+def _process_goatcounter(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist goatcounter rolling-window snapshots. Each run collects the
+    last ~2 weeks; rows are keyed by `period_end` so successive runs
+    accrete a trend of overlapping snapshots rather than merging into one.
+    """
+    period_end = collected.get("period_end", "")
+    if not period_end:
+        return
+
+    df_new = pd.DataFrame([{
+        "period_start": collected.get("period_start", ""),
+        "period_end": period_end,
+        "total_visitors": collected.get("total_visitors", 0),
+        "total_events": collected.get("total_events", 0),
+        "last_updated": now,
+    }])
+    sheets["goatcounter_periods"] = _upsert(
+        _load(store_path, "goatcounter_periods"), df_new, ["period_end"]
+    )
+
+    top_paths = collected.get("top_paths") or []
+    if top_paths:
+        df_new = pd.DataFrame([{
+            "period_end": period_end,
+            "path": p.get("path", ""),
+            "count": p.get("count", 0),
+        } for p in top_paths if p.get("path")])
+        if not df_new.empty:
+            sheets["goatcounter_paths"] = _upsert(
+                _load(store_path, "goatcounter_paths"), df_new, ["period_end", "path"]
+            )
+
+    events = collected.get("events") or []
+    if events:
+        df_new = pd.DataFrame([{
+            "period_end": period_end,
+            "event": e.get("event", ""),
+            "count": e.get("count", 0),
+        } for e in events if e.get("event")])
+        if not df_new.empty:
+            sheets["goatcounter_events"] = _upsert(
+                _load(store_path, "goatcounter_events"), df_new, ["period_end", "event"]
+            )
+
+
 def _process_mentions(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
     """
     Persist mentions. Matches the flat schema mentions.py returns:
@@ -473,6 +520,7 @@ _PROCESSORS = {
     "buttondown": _process_buttondown,
     "posthog": _process_posthog,
     "amazon": _process_amazon,
+    "goatcounter": _process_goatcounter,
     "mentions": _process_mentions,
     "stripe": _process_stripe,
 }
