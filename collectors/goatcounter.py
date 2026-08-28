@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -9,6 +10,42 @@ import httpx
 from collectors._helpers import _utcnow, _iso, _default_since
 
 logger = logging.getLogger(__name__)
+
+# Backoff between the first attempt and a single retry on transient failures
+# (timeouts, 429, 5xx). Module-level so tests can shrink it.
+_RETRY_BACKOFF_SECONDS = 2.0
+
+
+def _get_with_retry(client: httpx.Client, url: str, params: dict) -> httpx.Response:
+    """
+    GET with one retry on transient failures. Retries only timeouts,
+    other httpx transport errors, HTTP 429, and 5xx responses. Auth/other
+    4xx errors are returned immediately.
+    """
+    label = url.rsplit("/", 1)[-1]
+    for attempt in range(2):
+        try:
+            r = client.get(url, params=params)
+        except (httpx.TimeoutException, httpx.HTTPError) as exc:
+            if attempt == 0:
+                logger.warning(
+                    "GoatCounter %s: %s — retrying once",
+                    label, type(exc).__name__,
+                )
+                time.sleep(_RETRY_BACKOFF_SECONDS)
+                continue
+            raise
+        if r.is_success:
+            return r
+        if attempt == 0 and (r.status_code == 429 or r.status_code >= 500):
+            logger.warning(
+                "GoatCounter %s → HTTP %s — retrying once",
+                label, r.status_code,
+            )
+            time.sleep(_RETRY_BACKOFF_SECONDS)
+            continue
+        return r
+    return r
 
 
 def collect_goatcounter(
@@ -35,7 +72,7 @@ def collect_goatcounter(
 
     try:
         with httpx.Client(timeout=30, headers=headers) as client:
-            r = client.get(f"{base}/stats/total", params={"start": start, "end": end})
+            r = _get_with_retry(client, f"{base}/stats/total", {"start": start, "end": end})
             if not r.is_success:
                 logger.error(
                     "GoatCounter stats/total failed: HTTP %s — %s",
@@ -44,7 +81,7 @@ def collect_goatcounter(
                 return None
             total_data = r.json()
 
-            r = client.get(f"{base}/stats/hits", params={"start": start, "end": end, "limit": 200})
+            r = _get_with_retry(client, f"{base}/stats/hits", {"start": start, "end": end, "limit": 200})
             if not r.is_success:
                 logger.error(
                     "GoatCounter stats/hits failed: HTTP %s — %s",

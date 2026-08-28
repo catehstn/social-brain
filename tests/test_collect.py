@@ -1164,16 +1164,21 @@ class TestCollectGoatcounter:
         assert result["top_paths"] == []
         assert result["events"] == []
 
-    def test_timeout_returns_none(self, respx_mock):
-        """A timeout is caught and returns None without crashing."""
+    def test_timeout_returns_none(self, respx_mock, monkeypatch):
+        """A persistent timeout is caught and returns None after retry."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
         respx_mock.get(f"{self.BASE}/stats/total").mock(
             side_effect=httpx.TimeoutException("timed out")
         )
         result = collect_goatcounter("mysite", "token", since=SINCE)
         assert result is None
 
-    def test_hits_api_error_returns_none(self, respx_mock):
-        """Non-2xx on stats/hits (after stats/total succeeds) returns None."""
+    def test_hits_api_error_returns_none(self, respx_mock, monkeypatch):
+        """Non-2xx on stats/hits (after stats/total succeeds) returns None
+        after the retry on 429 also fails."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
         respx_mock.get(f"{self.BASE}/stats/total").mock(
             return_value=httpx.Response(200, json={"total": 5, "total_events": 0})
         )
@@ -1182,6 +1187,51 @@ class TestCollectGoatcounter:
         )
         result = collect_goatcounter("mysite", "token", since=SINCE)
         assert result is None
+
+    def test_transient_5xx_recovers_on_retry(self, respx_mock, monkeypatch):
+        """A single 503 followed by a 200 succeeds — retry recovers the run."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            side_effect=[
+                httpx.Response(503, text="upstream busy"),
+                httpx.Response(200, json={"total": 42, "total_events": 3}),
+            ]
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        result = collect_goatcounter("mysite", "token", since=SINCE)
+        assert result is not None
+        assert result["total_visitors"] == 42
+
+    def test_timeout_recovers_on_retry(self, respx_mock, monkeypatch):
+        """A single timeout followed by a 200 succeeds — retry recovers."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            side_effect=[
+                httpx.TimeoutException("first attempt timed out"),
+                httpx.Response(200, json={"total": 7, "total_events": 1}),
+            ]
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        result = collect_goatcounter("mysite", "token", since=SINCE)
+        assert result is not None
+        assert result["total_visitors"] == 7
+
+    def test_auth_error_not_retried(self, respx_mock, monkeypatch):
+        """401/403 must NOT trigger a retry — bad token won't fix itself."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        route = respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(401, json={"error": "unauthorized"})
+        )
+        result = collect_goatcounter("mysite", "badtoken", since=SINCE)
+        assert result is None
+        assert route.call_count == 1
 
 
 # ---------------------------------------------------------------------------

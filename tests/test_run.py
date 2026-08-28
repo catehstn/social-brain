@@ -450,13 +450,13 @@ class TestMain:
 
     def test_non_storable_platform_never_triggers_backfill(self, tmp_path, monkeypatch):
         # Regression for #51: platforms without a store handler (calendly,
-        # goatcounter, oreilly) were perpetually "new" and re-triggered a
+        # oreilly, upcoming) were perpetually "new" and re-triggered a
         # 3-month collect_all on every run.
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
         collected = {
             "mastodon": {"posts": []},
             "calendly": {"events": []},
-            "goatcounter": {"stats": {}},
+            "upcoming": {"sources": {}},
             "oreilly": {"payments": []},
         }
         mock_collect = MagicMock(return_value=collected)

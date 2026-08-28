@@ -710,9 +710,9 @@ def main() -> None:
             from store import update as store_update, get_known_platforms, storable_platforms, STORE_PATH
 
             # Only backfill for platforms we actually persist. Otherwise
-            # anything collected-but-not-stored (calendly, goatcounter,
-            # oreilly, upcoming) looks perpetually "new" and triggers a
-            # silent 3-month re-collect on every run — see #51.
+            # anything collected-but-not-stored (calendly, oreilly,
+            # upcoming) looks perpetually "new" and triggers a silent
+            # 3-month re-collect on every run — see #51.
             # `mentions` is separately excluded: it IS persisted, but its
             # sheets are named `hn_mentions`, `mastodon_mentions`, etc.,
             # which `get_known_platforms` (prefix-based) can never detect,
