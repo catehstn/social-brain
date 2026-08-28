@@ -477,8 +477,9 @@ class TestProcessButtondown:
 
 
 # ---------------------------------------------------------------------------
-# _process_posthog (replaces _process_vercel — writes to web_analytics_daily
-# with a source column so historical vercel rows can coexist post-migration)
+# _process_posthog — writes to web_analytics_daily with a (date, source)
+# composite key so pre-existing rows with a different `source` aren't
+# clobbered by a new posthog write.
 # ---------------------------------------------------------------------------
 
 class TestProcessPosthog:
@@ -512,12 +513,12 @@ class TestProcessPosthog:
         assert int(result.iloc[0]["page_views"]) == 200
         assert result.iloc[0]["source"] == "posthog"
 
-    def test_coexists_with_migrated_vercel_rows(self, tmp_path):
-        """A historical vercel row for the same date must survive a new posthog
-        write — the (date, source) key prevents accidental overwrite."""
+    def test_preserves_rows_with_different_source(self, tmp_path):
+        """A row already in the sheet with a different `source` must survive
+        a new posthog write — the (date, source) key prevents overwrite."""
         path = tmp_path / "s.xlsx"
         seed = pd.DataFrame([
-            {"date": "2026-03-01", "source": "vercel", "page_views": 999, "visitors": 500},
+            {"date": "2026-03-01", "source": "legacy", "page_views": 999, "visitors": 500},
         ])
         with pd.ExcelWriter(path, engine="openpyxl") as w:
             seed.to_excel(w, sheet_name="web_analytics_daily", index=False)
@@ -529,7 +530,7 @@ class TestProcessPosthog:
         rows = sheets["web_analytics_daily"]
         assert len(rows) == 2
         by_source = {r["source"]: r for _, r in rows.iterrows()}
-        assert int(by_source["vercel"]["page_views"]) == 999
+        assert int(by_source["legacy"]["page_views"]) == 999
         assert int(by_source["posthog"]["page_views"]) == 100
 
     def test_entry_without_date_skipped(self, tmp_path):

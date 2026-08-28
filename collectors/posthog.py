@@ -101,11 +101,7 @@ def collect_posthog(
     host_filter: str | Iterable[str] | None = None,
 ) -> dict[str, Any] | None:
     """
-    Collect web analytics from PostHog via HogQL.
-
-    Replaces the retired Vercel Web Analytics collector. The output shape
-    mirrors the old collector so downstream (store, analyse, dashboard)
-    can consume it via the same keys:
+    Collect web analytics from PostHog via HogQL. Returns:
 
         {
             "platform": "posthog",
