@@ -65,8 +65,8 @@ buffer_token: YOUR_BUFFER_TOKEN
 posthog_api_key:                              # phx_... personal API key
 posthog_project_id:                           # numeric project id
 posthog_host: https://us.i.posthog.com        # US cloud (default). Use https://eu.i.posthog.com for EU.
-# Restrict counts to production traffic. Any other $host values (Vercel
-# previews, git-branch deploys, localhost) are excluded from the rollup.
+# Restrict counts to production traffic. Any other $host values (preview
+# deploys, git-branch deploys, localhost) are excluded from the rollup.
 # Omit to count every $host in the project — the collector will log a
 # warning listing distinct hosts when contamination is likely.
 posthog_host_filter: www.your-site.com        # or ["www.a.com", "www.b.com"] for multi-site projects

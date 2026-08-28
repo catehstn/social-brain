@@ -1045,12 +1045,12 @@ class TestCollectPosthog:
         """When no host_filter is set and multiple $host values exist, warn."""
         self._mock_all(
             respx_mock,
-            distinct_hosts=[["www.prod.com", 100], ["preview.vercel.app", 30]],
+            distinct_hosts=[["www.prod.com", 100], ["preview.example.com", 30]],
         )
         with caplog.at_level("WARNING"):
             collect_posthog("k", "42", host=self.HOST, since=SINCE)
         msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-        assert any("no host_filter" in m and "preview.vercel.app" in m for m in msgs)
+        assert any("no host_filter" in m and "preview.example.com" in m for m in msgs)
 
     def test_no_filter_single_host_no_warning(self, respx_mock, caplog):
         """No warning when there's genuinely only one host."""

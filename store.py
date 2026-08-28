@@ -283,9 +283,8 @@ def _process_buttondown(collected: dict, sheets: dict, store_path: Path, now: st
 def _process_posthog(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
     """
     Persist PostHog daily rollup to `web_analytics_daily`, tagged with
-    source='posthog'. The sheet replaces the retired `vercel_daily` and
-    carries a `source` column so historical vercel rows (migrated in via
-    scripts/migrate_web_analytics.py) coexist with new posthog rows.
+    source='posthog'. The `source` column exists so any historical rows
+    already in the sheet coexist alongside new posthog rows.
     """
     daily = collected.get("daily", [])
     if daily:
