@@ -395,47 +395,61 @@ def _process_stripe(collected: dict, sheets: dict, store_path: Path, now: str) -
 
 def _process_goatcounter(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
     """
-    Persist goatcounter rolling-window snapshots. Each run collects the
-    last ~2 weeks; rows are keyed by `period_end` so successive runs
-    accrete a trend of overlapping snapshots rather than merging into one.
+    Persist goatcounter rolling-window snapshots. Rows are keyed by the
+    full window (period_start, period_end) so a wider `--months` run
+    doesn't get silently overwritten by a same-day default 2-week run,
+    and successive weekly runs still upsert in place. `period_days` is
+    stored explicitly so downstream trend code can normalize.
     """
     period_end = collected.get("period_end", "")
-    if not period_end:
+    period_start = collected.get("period_start", "")
+    if not period_end or not period_start:
         return
 
+    def _days_between(start: str, end: str) -> int:
+        try:
+            d0 = datetime.strptime(start, "%Y-%m-%d")
+            d1 = datetime.strptime(end, "%Y-%m-%d")
+            return max(1, (d1 - d0).days)
+        except ValueError:
+            return 0
+
     df_new = pd.DataFrame([{
-        "period_start": collected.get("period_start", ""),
+        "period_start": period_start,
         "period_end": period_end,
+        "period_days": _days_between(period_start, period_end),
         "total_visitors": collected.get("total_visitors", 0),
         "total_events": collected.get("total_events", 0),
         "last_updated": now,
     }])
     sheets["goatcounter_periods"] = _upsert(
-        _load(store_path, "goatcounter_periods"), df_new, ["period_end"]
+        _load(store_path, "goatcounter_periods"), df_new, ["period_start", "period_end"]
     )
 
     top_paths = collected.get("top_paths") or []
     if top_paths:
         df_new = pd.DataFrame([{
+            "period_start": period_start,
             "period_end": period_end,
             "path": p.get("path", ""),
             "count": p.get("count", 0),
         } for p in top_paths if p.get("path")])
         if not df_new.empty:
             sheets["goatcounter_paths"] = _upsert(
-                _load(store_path, "goatcounter_paths"), df_new, ["period_end", "path"]
+                _load(store_path, "goatcounter_paths"), df_new, ["period_start", "period_end", "path"]
             )
 
     events = collected.get("events") or []
     if events:
         df_new = pd.DataFrame([{
+            "period_start": period_start,
             "period_end": period_end,
             "event": e.get("event", ""),
             "count": e.get("count", 0),
         } for e in events if e.get("event")])
         if not df_new.empty:
             sheets["goatcounter_events"] = _upsert(
-                _load(store_path, "goatcounter_events"), df_new, ["period_end", "event"]
+                _load(store_path, "goatcounter_events"), df_new, ["period_start", "period_end", "event"]
             )
 
 

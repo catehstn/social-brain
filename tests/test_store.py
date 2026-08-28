@@ -618,7 +618,9 @@ class TestProcessGoatcounter:
         _process_goatcounter(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
         assert "goatcounter_periods" in sheets
         row = sheets["goatcounter_periods"].iloc[0]
+        assert row["period_start"] == "2026-07-31"
         assert row["period_end"] == "2026-08-14"
+        assert int(row["period_days"]) == 14
         assert int(row["total_visitors"]) == 19
         assert int(row["total_events"]) == 12
 
@@ -627,15 +629,22 @@ class TestProcessGoatcounter:
         _process_goatcounter(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
         assert list(sheets["goatcounter_paths"]["path"]) == ["/", "/about"]
         assert list(sheets["goatcounter_events"]["event"]) == ["result/conrad", "result/stuck"]
+        # period_start must ride along on every row so different windows
+        # don't collide via the (period_end, path/event) key.
+        assert set(sheets["goatcounter_paths"]["period_start"]) == {"2026-07-31"}
+        assert set(sheets["goatcounter_events"]["period_start"]) == {"2026-07-31"}
 
     def test_two_periods_accrete(self, tmp_path):
         # Successive collections with different period_end must produce a trend
         # rather than overwriting one row.
         path = tmp_path / "s.xlsx"
-        for period_end, visitors in [("2026-08-14", 19), ("2026-08-21", 12)]:
+        for period_start, period_end, visitors in [
+            ("2026-07-31", "2026-08-14", 19),
+            ("2026-08-07", "2026-08-21", 12),
+        ]:
             sheets = {}
             _process_goatcounter(
-                self._collected(period_end=period_end, total_visitors=visitors),
+                self._collected(period_start=period_start, period_end=period_end, total_visitors=visitors),
                 sheets, path, NOW,
             )
             with pd.ExcelWriter(path, engine="openpyxl") as w:
@@ -646,7 +655,7 @@ class TestProcessGoatcounter:
         assert set(result["period_end"]) == {"2026-08-14", "2026-08-21"}
 
     def test_same_period_upserts_in_place(self, tmp_path):
-        # A re-run of the same period_end must overwrite, not duplicate.
+        # A re-run of the same window must overwrite, not duplicate.
         path = tmp_path / "s.xlsx"
         for visitors in [5, 19]:
             sheets = {}
@@ -661,11 +670,41 @@ class TestProcessGoatcounter:
         assert len(result) == 1
         assert int(result.iloc[0]["total_visitors"]) == 19
 
+    def test_different_window_sizes_dont_overwrite(self, tmp_path):
+        # Regression: a default 2-week run must NOT overwrite an earlier
+        # same-day --months 3 run. Both are legitimate history.
+        path = tmp_path / "s.xlsx"
+        for period_start, visitors in [
+            ("2026-05-14", 200),   # --months 3 window (90 days)
+            ("2026-07-31", 19),    # default 2-week window (same period_end)
+        ]:
+            sheets = {}
+            _process_goatcounter(
+                self._collected(period_start=period_start, total_visitors=visitors),
+                sheets, path, NOW,
+            )
+            with pd.ExcelWriter(path, engine="openpyxl") as w:
+                for name, df in sheets.items():
+                    df.to_excel(w, sheet_name=name, index=False)
+        result = _load(path, "goatcounter_periods")
+        assert len(result) == 2
+        by_start = {r["period_start"]: r for _, r in result.iterrows()}
+        assert int(by_start["2026-05-14"]["total_visitors"]) == 200
+        assert int(by_start["2026-07-31"]["total_visitors"]) == 19
+
     def test_no_period_end_writes_nothing(self, tmp_path):
         # Defensive: collector returning malformed data must not write empty
         # rows to the store.
         sheets = {}
         _process_goatcounter({"total_visitors": 5}, sheets, tmp_path / "s.xlsx", NOW)
+        assert sheets == {}
+
+    def test_no_period_start_writes_nothing(self, tmp_path):
+        sheets = {}
+        _process_goatcounter(
+            {"period_end": "2026-08-14", "total_visitors": 5},
+            sheets, tmp_path / "s.xlsx", NOW,
+        )
         assert sheets == {}
 
     def test_empty_paths_and_events_skip_those_sheets(self, tmp_path):
