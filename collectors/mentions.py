@@ -112,11 +112,14 @@ def collect_mentions(
                             url = None
                             break
                         status = n.get("status", {})
+                        # Always link to the status on our instance, not the remote one
+                        status_id = status.get("id", "")
+                        local_url = f"https://{mastodon_instance}/@{n.get('account', {}).get('acct', '')}/{status_id}" if status_id else status.get("url", "")
                         notifications.append({
                             "created_at": created[:10],
                             "from": n.get("account", {}).get("acct", ""),
                             "content": _strip_html_simple(status.get("content", ""))[:300],
-                            "url": status.get("url", ""),
+                            "url": local_url,
                         })
                     else:
                         # Follow Link header pagination
