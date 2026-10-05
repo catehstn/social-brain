@@ -1317,6 +1317,99 @@ class TestCollectMentions:
         assert "mastodon" in result["sources"]
         assert result["sources"]["mastodon"][0]["from"] == "friend@m.social"
 
+    def test_mastodon_mention_url_points_at_local_remote_user(self, respx_mock):
+        """Remote-user mention: URL rewrites to our instance so Cate can
+        interact (fav, boost, reply) while logged in. The local status id
+        and the remote-URL id are deliberately different so this proves
+        the local id is read from `status.id` rather than parsed from the
+        remote URL."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {"acct": "friend@m.social"},
+                 "status": {"id": "99", "content": "<p>hi</p>",
+                            "url": "https://m.social/@friend/12345"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert result["sources"]["mastodon"][0]["url"] == \
+            "https://hachyderm.io/@friend@m.social/99"
+
+    def test_mastodon_mention_url_points_at_local_local_user(self, respx_mock):
+        """Local-user mention (acct is a bare username with no @domain):
+        URL stays on our instance with the bare handle."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {"acct": "localpal"},
+                 "status": {"id": "7777", "content": "<p>hi</p>",
+                            "url": "https://hachyderm.io/@localpal/7777"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert result["sources"]["mastodon"][0]["url"] == \
+            "https://hachyderm.io/@localpal/7777"
+
+    def test_mastodon_mention_tolerates_null_account_and_status(self, respx_mock):
+        """Mastodon returns `null` (not an empty object) for the account/status
+        of deleted or suspended authors, and sometimes returns the key with a
+        `null` value for individual fields (an acct that failed webfinger, a
+        moderated status whose content is redacted). The parser must not
+        crash on any of these shapes, must not pass `None` downstream as a
+        string, and the rest of the batch must still be collected."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                # Deleted author — account is null.
+                {"created_at": RECENT, "account": None,
+                 "status": {"id": "97", "content": "x",
+                            "url": "https://m.social/@gone/97"}},
+                # Deleted status — status is null.
+                {"created_at": RECENT, "account": {"acct": "friend@m.social"},
+                 "status": None},
+                # Key present, value null — webfinger-failed acct AND
+                # redacted/moderated content.
+                {"created_at": RECENT, "account": {"acct": None},
+                 "status": {"id": "88", "content": None,
+                            "url": "https://m.social/@x/88"}},
+                # Alongside a healthy one, to prove the batch isn't dropped.
+                {"created_at": RECENT, "account": {"acct": "ok@m.social"},
+                 "status": {"id": "77", "content": "hi",
+                            "url": "https://m.social/@ok/42"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        mastodon = result["sources"]["mastodon"]
+        # All four survived — no null field aborted the batch.
+        assert len(mastodon) == 4
+        # Null account → acct is "", URL falls back to the status URL.
+        assert mastodon[0]["from"] == ""
+        assert mastodon[0]["url"] == "https://m.social/@gone/97"
+        # Null status → status_id is "", URL is "" from the fallback.
+        assert mastodon[1]["from"] == "friend@m.social"
+        assert mastodon[1]["url"] == ""
+        # Null-valued acct AND null-valued content → both coerced to ""
+        # rather than left as None.
+        assert mastodon[2]["from"] == ""
+        assert mastodon[2]["content"] == ""
+        # Healthy one still gets the local-instance URL (id 77, not 42).
+        assert mastodon[3]["url"] == "https://hachyderm.io/@ok@m.social/77"
+
     def test_mastodon_pagination_capped(self, respx_mock):
         respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
             return_value=httpx.Response(200, json={"hits": []})

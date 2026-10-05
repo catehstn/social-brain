@@ -111,12 +111,36 @@ def collect_mentions(
                         if created and created < _iso(since):
                             url = None
                             break
-                        status = n.get("status", {})
+                        # Mastodon returns `null` (not an empty object) for
+                        # account/status on a deleted or suspended author's
+                        # mention, so `.get("x", {})` is not safe. The inner
+                        # `.get("y") or ""` guards against the sibling case
+                        # where the key is present but the value is `null`
+                        # (e.g. a moderated status with `content: null`,
+                        # or an acct that failed webfinger): `.get`'s
+                        # default fires only on missing keys, not null
+                        # values, so a bare `.get("y", "")` leaves `None`
+                        # downstream and `_strip_html_simple(None)` or
+                        # `"@None"` in the URL would follow.
+                        status = n.get("status") or {}
+                        acct = (n.get("account") or {}).get("acct") or ""
+                        status_id = status.get("id") or ""
+                        content = status.get("content") or ""
+                        # Link to the status on our instance so Cate can
+                        # interact (fav, boost, reply) while logged in.
+                        # Without both pieces we would produce
+                        # https://hachyderm.io/@/<id> or
+                        # https://hachyderm.io/@acct/ — broken on click —
+                        # so fall back to the status's own URL instead.
+                        if acct and status_id:
+                            local_url = f"https://{mastodon_instance}/@{acct}/{status_id}"
+                        else:
+                            local_url = status.get("url") or ""
                         notifications.append({
                             "created_at": created[:10],
-                            "from": n.get("account", {}).get("acct", ""),
-                            "content": _strip_html_simple(status.get("content", ""))[:300],
-                            "url": status.get("url", ""),
+                            "from": acct,
+                            "content": _strip_html_simple(content)[:300],
+                            "url": local_url,
                         })
                     else:
                         # Follow Link header pagination
