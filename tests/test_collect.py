@@ -540,6 +540,46 @@ class TestCollectLinkedin:
         assert any("days old" in r.message for r in caplog.records)
 
 
+class TestMergeImpressionsIntoEngagement:
+    """The TOP POSTS left-and-right-side merge: a post appears in both lists
+    only when it is top-N by engagement AND top-N by impressions."""
+
+    def test_full_overlap_every_engagement_row_gets_impressions(self):
+        from collectors.linkedin import _merge_impressions_into_engagement
+        engagement = [{"url": "a"}, {"url": "b"}]
+        impressions = [{"url": "a", "impressions": 100}, {"url": "b", "impressions": 200}]
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert engagement == [{"url": "a", "impressions": 100},
+                              {"url": "b", "impressions": 200}]
+
+    def test_partial_overlap_leaves_missing_rows_without_the_key(self):
+        """A row absent from the right-side table has an unknown impressions
+        count — the key is omitted so None isn't mistaken for a real zero."""
+        from collectors.linkedin import _merge_impressions_into_engagement
+        engagement = [{"url": "a"}, {"url": "b"}]
+        impressions = [{"url": "a", "impressions": 100}]  # no "b"
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert engagement[0] == {"url": "a", "impressions": 100}
+        assert engagement[1] == {"url": "b"}  # no impressions key at all
+        assert "impressions" not in engagement[1]
+
+    def test_empty_right_table_leaves_engagement_unchanged(self):
+        from collectors.linkedin import _merge_impressions_into_engagement
+        engagement = [{"url": "a"}]
+        _merge_impressions_into_engagement(engagement, [])
+        assert engagement == [{"url": "a"}]
+
+    def test_none_impressions_in_right_table_is_treated_as_unknown(self):
+        """pandas-parsed rows can carry impressions=None where the cell was
+        empty. Those should not become false 'impressions=None' assertions on
+        the engagement row."""
+        from collectors.linkedin import _merge_impressions_into_engagement
+        engagement = [{"url": "a"}]
+        impressions = [{"url": "a", "impressions": None}]
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert "impressions" not in engagement[0]
+
+
 # ---------------------------------------------------------------------------
 # Substack (file-based — no HTTP needed)
 # ---------------------------------------------------------------------------

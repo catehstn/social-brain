@@ -142,12 +142,9 @@ def _parse_linkedin_xlsx(path: Path) -> dict[str, Any]:
             post_texts[post_url] = text
             logger.debug("LinkedIn post text fetched: %s chars", len(text) if text else 0)
 
-        # Build impressions lookup from the right-side table
-        impressions_by_url = {p["url"]: p["impressions"] for p in top_by_impressions}
-
+        _merge_impressions_into_engagement(top_by_engagement, top_by_impressions)
         for p in top_by_engagement:
             p["text"] = post_texts.get(p["url"])
-            p["impressions"] = impressions_by_url.get(p["url"])
         for p in top_by_impressions:
             p["text"] = post_texts.get(p["url"])
 
@@ -184,6 +181,32 @@ def _parse_linkedin_xlsx(path: Path) -> dict[str, Any]:
         result["demographics"] = df.to_dict(orient="records")
 
     return result
+
+
+def _merge_impressions_into_engagement(
+    top_by_engagement: list[dict], top_by_impressions: list[dict]
+) -> None:
+    """Enrich the TOP POSTS left-side (engagement-ranked) list with
+    impressions pulled from the right-side (impressions-ranked) list,
+    keyed by URL.
+
+    Both tables are top-N and the two sets don't fully overlap: a post
+    high on engagement is often outside the top-N by impressions, and
+    vice versa. The `impressions` key is omitted when there is no
+    match — leaving `impressions: None` in the JSON would be
+    indistinguishable from a real zero, and any downstream engagement-
+    rate calculation on that row would either crash or treat null as
+    zero and emit nonsense.
+    """
+    impressions_by_url = {
+        p["url"]: p["impressions"]
+        for p in top_by_impressions
+        if p.get("impressions") is not None
+    }
+    for p in top_by_engagement:
+        impressions = impressions_by_url.get(p["url"])
+        if impressions is not None:
+            p["impressions"] = impressions
 
 
 def _parse_linkedin_csv(path: Path) -> dict[str, Any]:
