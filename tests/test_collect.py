@@ -1038,6 +1038,45 @@ class TestCollectMentions:
         assert "mastodon" in result["sources"]
         assert result["sources"]["mastodon"][0]["from"] == "friend@m.social"
 
+    def test_mastodon_mention_url_points_at_local_instance(self, respx_mock):
+        """The URL rewrites to our instance so Cate can interact while logged in."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {"acct": "friend@m.social"},
+                 "status": {"id": "12345", "content": "<p>hi</p>",
+                            "url": "https://m.social/@friend/12345"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert result["sources"]["mastodon"][0]["url"] == \
+            "https://hachyderm.io/@friend@m.social/12345"
+
+    def test_mastodon_mention_falls_back_to_remote_url_without_acct(self, respx_mock):
+        """A deleted/suspended author has no acct in the payload. Without the
+        fallback we would emit https://hachyderm.io/@/12345 — a broken link —
+        so it falls back to the status's own url instead."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {},
+                 "status": {"id": "99", "content": "x",
+                            "url": "https://m.social/@gone/99"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert result["sources"]["mastodon"][0]["url"] == "https://m.social/@gone/99"
+
     def test_mastodon_pagination_capped(self, respx_mock):
         respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
             return_value=httpx.Response(200, json={"hits": []})

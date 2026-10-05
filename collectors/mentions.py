@@ -112,12 +112,22 @@ def collect_mentions(
                             url = None
                             break
                         status = n.get("status", {})
-                        # Always link to the status on our instance, not the remote one
+                        acct = n.get("account", {}).get("acct", "")
                         status_id = status.get("id", "")
-                        local_url = f"https://{mastodon_instance}/@{n.get('account', {}).get('acct', '')}/{status_id}" if status_id else status.get("url", "")
+                        # Link to the status on our instance so Cate can
+                        # interact (fav, boost, reply) while logged in.
+                        # A deleted or suspended author has no acct in the
+                        # notification payload, and the fallback also catches
+                        # the (rare) mention without a status id; both would
+                        # otherwise produce https://hachyderm.io/@/<id> or
+                        # https://hachyderm.io/@acct/ — broken on click.
+                        if acct and status_id:
+                            local_url = f"https://{mastodon_instance}/@{acct}/{status_id}"
+                        else:
+                            local_url = status.get("url", "")
                         notifications.append({
                             "created_at": created[:10],
-                            "from": n.get("account", {}).get("acct", ""),
+                            "from": acct,
                             "content": _strip_html_simple(status.get("content", ""))[:300],
                             "url": local_url,
                         })
