@@ -27,6 +27,7 @@ from collect import (
     collect_posthog,
     collect_all,
 )
+from collectors.linkedin import _merge_impressions_into_engagement
 from collectors.linkedin_api import collect_linkedin_api
 
 SINCE = datetime(2026, 2, 20, tzinfo=timezone.utc)
@@ -605,6 +606,48 @@ class TestCollectLinkedin:
         with caplog.at_level(logging.WARNING, logger="collectors.linkedin"):
             collect_linkedin(linkedin_drops_dir=tmp_path)
         assert any("days old" in r.message for r in caplog.records)
+
+
+class TestMergeImpressionsIntoEngagement:
+    """The TOP POSTS left-and-right-side merge: a post appears in both lists
+    only when it is top-N by engagement AND top-N by impressions."""
+
+    def test_full_overlap_every_engagement_row_gets_impressions(self):
+        engagement = [{"url": "a", "date": "2026-03-01", "engagements": 10},
+                      {"url": "b", "date": "2026-03-02", "engagements": 20}]
+        impressions = [{"url": "a", "impressions": 100},
+                       {"url": "b", "impressions": 200}]
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert engagement[0]["impressions"] == 100
+        assert engagement[1]["impressions"] == 200
+        # Other fields are preserved.
+        assert engagement[0]["engagements"] == 10
+        assert engagement[1]["date"] == "2026-03-02"
+
+    def test_partial_overlap_leaves_missing_rows_without_the_key(self):
+        """A row absent from the right-side table has an unknown impressions
+        count — the key is omitted so Claude's rate-rendering doesn't treat
+        null as zero and emit nonsense."""
+        engagement = [{"url": "a"}, {"url": "b"}]
+        impressions = [{"url": "a", "impressions": 100}]  # no "b"
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert engagement[0] == {"url": "a", "impressions": 100}
+        assert engagement[1] == {"url": "b"}  # no impressions key at all
+        assert "impressions" not in engagement[1]
+
+    def test_empty_right_table_leaves_engagement_unchanged(self):
+        engagement = [{"url": "a"}]
+        _merge_impressions_into_engagement(engagement, [])
+        assert engagement == [{"url": "a"}]
+
+    def test_none_impressions_in_right_table_is_treated_as_unknown(self):
+        """pandas-parsed rows can carry impressions=None where the cell was
+        empty. Those should not become false 'impressions=None' assertions on
+        the engagement row."""
+        engagement = [{"url": "a"}]
+        impressions = [{"url": "a", "impressions": None}]
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert "impressions" not in engagement[0]
 
 
 # ---------------------------------------------------------------------------
