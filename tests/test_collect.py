@@ -27,6 +27,7 @@ from collect import (
     collect_vercel,
     collect_all,
 )
+from collectors.linkedin import _merge_impressions_into_engagement
 
 SINCE = datetime(2026, 2, 20, tzinfo=timezone.utc)
 RECENT = "2026-03-01T10:00:00Z"
@@ -545,17 +546,21 @@ class TestMergeImpressionsIntoEngagement:
     only when it is top-N by engagement AND top-N by impressions."""
 
     def test_full_overlap_every_engagement_row_gets_impressions(self):
-        from collectors.linkedin import _merge_impressions_into_engagement
-        engagement = [{"url": "a"}, {"url": "b"}]
-        impressions = [{"url": "a", "impressions": 100}, {"url": "b", "impressions": 200}]
+        engagement = [{"url": "a", "date": "2026-03-01", "engagements": 10},
+                      {"url": "b", "date": "2026-03-02", "engagements": 20}]
+        impressions = [{"url": "a", "impressions": 100},
+                       {"url": "b", "impressions": 200}]
         _merge_impressions_into_engagement(engagement, impressions)
-        assert engagement == [{"url": "a", "impressions": 100},
-                              {"url": "b", "impressions": 200}]
+        assert engagement[0]["impressions"] == 100
+        assert engagement[1]["impressions"] == 200
+        # Other fields are preserved.
+        assert engagement[0]["engagements"] == 10
+        assert engagement[1]["date"] == "2026-03-02"
 
     def test_partial_overlap_leaves_missing_rows_without_the_key(self):
         """A row absent from the right-side table has an unknown impressions
-        count — the key is omitted so None isn't mistaken for a real zero."""
-        from collectors.linkedin import _merge_impressions_into_engagement
+        count — the key is omitted so Claude's rate-rendering doesn't treat
+        null as zero and emit nonsense."""
         engagement = [{"url": "a"}, {"url": "b"}]
         impressions = [{"url": "a", "impressions": 100}]  # no "b"
         _merge_impressions_into_engagement(engagement, impressions)
@@ -564,7 +569,6 @@ class TestMergeImpressionsIntoEngagement:
         assert "impressions" not in engagement[1]
 
     def test_empty_right_table_leaves_engagement_unchanged(self):
-        from collectors.linkedin import _merge_impressions_into_engagement
         engagement = [{"url": "a"}]
         _merge_impressions_into_engagement(engagement, [])
         assert engagement == [{"url": "a"}]
@@ -573,7 +577,6 @@ class TestMergeImpressionsIntoEngagement:
         """pandas-parsed rows can carry impressions=None where the cell was
         empty. Those should not become false 'impressions=None' assertions on
         the engagement row."""
-        from collectors.linkedin import _merge_impressions_into_engagement
         engagement = [{"url": "a"}]
         impressions = [{"url": "a", "impressions": None}]
         _merge_impressions_into_engagement(engagement, impressions)

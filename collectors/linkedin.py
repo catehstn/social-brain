@@ -193,10 +193,11 @@ def _merge_impressions_into_engagement(
     Both tables are top-N and the two sets don't fully overlap: a post
     high on engagement is often outside the top-N by impressions, and
     vice versa. The `impressions` key is omitted when there is no
-    match — leaving `impressions: None` in the JSON would be
-    indistinguishable from a real zero, and any downstream engagement-
-    rate calculation on that row would either crash or treat null as
-    zero and emit nonsense.
+    match. JSON itself can distinguish `null` from `0`, but the
+    downstream prompt consumer (Claude) treats a null engagement
+    denominator as zero and renders nonsense rates for the affected
+    rows; omitting the key lets the renderer skip the per-post rate
+    for those posts instead.
     """
     impressions_by_url = {
         p["url"]: p["impressions"]
