@@ -111,16 +111,20 @@ def collect_mentions(
                         if created and created < _iso(since):
                             url = None
                             break
-                        status = n.get("status", {})
-                        acct = n.get("account", {}).get("acct", "")
+                        # Mastodon returns `null` (not an empty object) for
+                        # the account and status fields of a deleted or
+                        # suspended author's mention, so `.get("x", {})` is
+                        # not safe — `None.get(...)` would raise and drop
+                        # the whole batch.
+                        status = n.get("status") or {}
+                        acct = (n.get("account") or {}).get("acct", "")
                         status_id = status.get("id", "")
                         # Link to the status on our instance so Cate can
                         # interact (fav, boost, reply) while logged in.
-                        # A deleted or suspended author has no acct in the
-                        # notification payload, and the fallback also catches
-                        # the (rare) mention without a status id; both would
-                        # otherwise produce https://hachyderm.io/@/<id> or
-                        # https://hachyderm.io/@acct/ — broken on click.
+                        # Without both pieces we would produce
+                        # https://hachyderm.io/@/<id> or
+                        # https://hachyderm.io/@acct/ — broken on click —
+                        # so fall back to the status's own URL instead.
                         if acct and status_id:
                             local_url = f"https://{mastodon_instance}/@{acct}/{status_id}"
                         else:
