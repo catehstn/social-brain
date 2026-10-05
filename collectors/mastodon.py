@@ -86,42 +86,48 @@ def collect_mastodon(
         # New follows during the period (requires access token)
         new_follows: list[dict] = []
         if access_token:
-            auth_headers = {"Authorization": f"Bearer {access_token}"}
-            with httpx.Client(timeout=30) as client:
-                params_f: dict[str, Any] = {"types[]": "follow", "limit": 80}
-                while True:
-                    r = client.get(
-                        f"{base}/api/v1/notifications",
-                        params=params_f,
-                        headers=auth_headers,
-                    )
-                    r.raise_for_status()
-                    batch = r.json()
-                    if not batch:
-                        break
-                    stop = False
-                    for n in batch:
-                        created = datetime.fromisoformat(
-                            n["created_at"].replace("Z", "+00:00")
+            try:
+                auth_headers = {"Authorization": f"Bearer {access_token}"}
+                with httpx.Client(timeout=30) as client:
+                    params_f: dict[str, Any] = {"types[]": "follow", "limit": 80}
+                    while True:
+                        r = client.get(
+                            f"{base}/api/v1/notifications",
+                            params=params_f,
+                            headers=auth_headers,
                         )
-                        if created < since:
-                            stop = True
+                        r.raise_for_status()
+                        batch = r.json()
+                        if not batch:
                             break
-                        acct = n.get("account", {})
-                        new_follows.append({
-                            "followed_at": n["created_at"],
-                            "account": acct.get("acct", ""),
-                            "display_name": acct.get("display_name", ""),
-                            "followers": acct.get("followers_count", 0),
-                        })
-                    if stop:
-                        break
-                    link = r.headers.get("Link", "")
-                    m = re.search(r'<[^>]+\?[^>]*max_id=(\d+)[^>]*>;\s*rel="next"', link)
-                    if not m:
-                        break
-                    params_f["max_id"] = m.group(1)
-            logger.info("Mastodon: collected %d new follows since %s", len(new_follows), _iso(since))
+                        stop = False
+                        for n in batch:
+                            created = datetime.fromisoformat(
+                                n["created_at"].replace("Z", "+00:00")
+                            )
+                            if created < since:
+                                stop = True
+                                break
+                            acct = n.get("account", {})
+                            new_follows.append({
+                                "followed_at": n["created_at"],
+                                "account": acct.get("acct", ""),
+                                "display_name": acct.get("display_name", ""),
+                                "followers": acct.get("followers_count", 0),
+                            })
+                        if stop:
+                            break
+                        link = r.headers.get("Link", "")
+                        m = re.search(r'<[^>]+\?[^>]*max_id=(\d+)[^>]*>;\s*rel="next"', link)
+                        if not m:
+                            break
+                        params_f["max_id"] = m.group(1)
+                logger.info("Mastodon: collected %d new follows since %s", len(new_follows), _iso(since))
+            except Exception as exc:
+                logger.error(
+                    "Mastodon: new-follows collection failed (%s): %s — returning posts only",
+                    type(exc).__name__, exc,
+                )
 
         result: dict[str, Any] = {
             "platform": "mastodon",
@@ -140,6 +146,18 @@ def collect_mastodon(
             result["new_follows_count"] = len(new_follows)
         return result
 
+    except httpx.TimeoutException as exc:
+        logger.error("Mastodon collection timed out (%s): %s", type(exc).__name__, exc)
+        return None
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "Mastodon HTTP %s from %s: %s",
+            exc.response.status_code, exc.request.url, exc.response.text[:300],
+        )
+        return None
+    except httpx.HTTPError as exc:
+        logger.error("Mastodon HTTP error (%s): %s", type(exc).__name__, exc)
+        return None
     except Exception as exc:
-        logger.error("Mastodon collection failed: %s", exc)
+        logger.error("Mastodon collection failed (%s): %s", type(exc).__name__, exc)
         return None

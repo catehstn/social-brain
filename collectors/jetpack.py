@@ -186,7 +186,11 @@ def collect_jetpack(
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 403 and can_reauth:
             logger.warning("Jetpack: 403 — token expired, prompting for WordPress.com password")
-            password = getpass.getpass(f"WordPress.com password for {username}: ")
+            try:
+                password = getpass.getpass(f"WordPress.com password for {username}: ")
+            except (EOFError, KeyboardInterrupt):
+                logger.error("Jetpack: cannot prompt for password in non-interactive session — skipping")
+                return None
             new_token = _reauth_jetpack(client_id, client_secret, username, password)
             if new_token:
                 try:

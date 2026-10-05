@@ -30,7 +30,7 @@ def _collect_buttondown_newsletter(
     while True:
         r = client.get(
             "https://api.buttondown.email/v1/emails",
-            params={"status": "sent", "page_size": 20, "page": page},
+            params={"status": "sent", "page_size": 20, "page": page, "ordering": "-publish_date"},
             headers=headers,
         )
         r.raise_for_status()

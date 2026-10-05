@@ -80,9 +80,11 @@ def get_known_platforms(store_path: Path = STORE_PATH) -> set[str]:
             "jetpack": "jetpack",
             "linkedin": "linkedin",
             "buttondown": "buttondown",
-            "vercel": "vercel",
+            "web_analytics": "posthog",
             "amazon": "amazon",
+            "goatcounter": "goatcounter",
             "mentions": "mentions",
+            "stripe": "stripe",
         }
         for sheet in xl.sheet_names:
             for prefix, platform in prefix_map.items():
@@ -278,15 +280,23 @@ def _process_buttondown(collected: dict, sheets: dict, store_path: Path, now: st
         )
 
 
-def _process_vercel(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+def _process_posthog(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist PostHog daily rollup to `web_analytics_daily`, tagged with
+    source='posthog'. The `source` column exists so any historical rows
+    already in the sheet coexist alongside new posthog rows.
+    """
     daily = collected.get("daily", [])
     if daily:
         df_new = pd.DataFrame([{
             "date": d.get("date", ""),
+            "source": "posthog",
             "page_views": d.get("page_views", 0),
             "visitors": d.get("visitors", 0),
         } for d in daily if d.get("date")])
-        sheets["vercel_daily"] = _upsert(_load(store_path, "vercel_daily"), df_new, ["date"])
+        sheets["web_analytics_daily"] = _upsert(
+            _load(store_path, "web_analytics_daily"), df_new, ["date", "source"],
+        )
 
 
 def _process_amazon(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
@@ -307,63 +317,208 @@ def _process_amazon(collected: dict, sheets: dict, store_path: Path, now: str) -
         sheets["amazon"] = _upsert(_load(store_path, "amazon"), df_new, ["asin", "marketplace"])
 
 
+def _process_stripe(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist Stripe data:
+      - stripe_monthly: (account, month) → count, gross_cents, currency
+      - stripe_sessions: paid checkout sessions with metadata flattened to JSON
+      - stripe_invoices: paid invoices with line-item summary
+      - stripe_products: current product catalogue per account
+    """
+    import json as _json
+    accounts = collected.get("accounts", {}) or {}
+
+    monthly_rows = []
+    session_rows = []
+    invoice_rows = []
+    product_rows = []
+    for label, acct in accounts.items():
+        currency = (acct.get("currency") or "usd").upper()
+        for m in acct.get("monthly", []) or []:
+            monthly_rows.append({
+                "account": label,
+                "month": m.get("month", ""),
+                "count": m.get("count", 0),
+                "gross_cents": m.get("gross_cents", 0),
+                "currency": currency,
+                "last_updated": now,
+            })
+        for s in acct.get("paid_sessions", []) or []:
+            session_rows.append({
+                "session_id": s.get("id", ""),
+                "account": label,
+                "created": s.get("created", ""),
+                "amount_cents": s.get("amount_cents") or 0,
+                "currency": (s.get("currency") or "").upper() or currency,
+                "customer_email": s.get("customer_email") or "",
+                "discount_code": s.get("discount_code") or "",
+                "metadata_json": _json.dumps(s.get("metadata") or {}, sort_keys=True),
+                "last_updated": now,
+            })
+        for i in acct.get("paid_invoices", []) or []:
+            invoice_rows.append({
+                "invoice_id": i.get("id", ""),
+                "account": label,
+                "created": i.get("created", ""),
+                "amount_paid_cents": i.get("amount_paid_cents") or 0,
+                "currency": (i.get("currency") or "").upper() or currency,
+                "attempt_count": i.get("attempt_count", 0) or 0,
+                "paid_out_of_band": bool(i.get("paid_out_of_band", False)),
+                "collection_method": i.get("collection_method") or "",
+                "billing_reason": i.get("billing_reason") or "",
+                "lines_json": _json.dumps(i.get("lines") or [], sort_keys=True),
+                "last_updated": now,
+            })
+        for p in acct.get("products", []) or []:
+            product_rows.append({
+                "product_id": p.get("id", ""),
+                "account": label,
+                "name": p.get("name", "") or "",
+                "active": bool(p.get("active", False)),
+                "last_updated": now,
+            })
+
+    if monthly_rows:
+        df = pd.DataFrame(monthly_rows)
+        sheets["stripe_monthly"] = _upsert(_load(store_path, "stripe_monthly"), df, ["account", "month"])
+    if session_rows:
+        df = pd.DataFrame(session_rows)
+        sheets["stripe_sessions"] = _upsert(_load(store_path, "stripe_sessions"), df, ["session_id"])
+    if invoice_rows:
+        df = pd.DataFrame(invoice_rows)
+        sheets["stripe_invoices"] = _upsert(_load(store_path, "stripe_invoices"), df, ["invoice_id"])
+    if product_rows:
+        df = pd.DataFrame(product_rows)
+        sheets["stripe_products"] = _upsert(_load(store_path, "stripe_products"), df, ["product_id", "account"])
+
+
+def _process_goatcounter(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist goatcounter rolling-window snapshots. Rows are keyed by the
+    full window (period_start, period_end) so a wider `--months` run
+    doesn't get silently overwritten by a same-day default 2-week run,
+    and successive weekly runs still upsert in place. `period_days` is
+    stored explicitly so downstream trend code can normalize.
+    """
+    period_end = collected.get("period_end", "")
+    period_start = collected.get("period_start", "")
+    if not period_end or not period_start:
+        return
+
+    def _days_between(start: str, end: str) -> int:
+        try:
+            d0 = datetime.strptime(start, "%Y-%m-%d")
+            d1 = datetime.strptime(end, "%Y-%m-%d")
+            return max(1, (d1 - d0).days)
+        except ValueError:
+            return 0
+
+    df_new = pd.DataFrame([{
+        "period_start": period_start,
+        "period_end": period_end,
+        "period_days": _days_between(period_start, period_end),
+        "total_visitors": collected.get("total_visitors", 0),
+        "total_events": collected.get("total_events", 0),
+        "last_updated": now,
+    }])
+    sheets["goatcounter_periods"] = _upsert(
+        _load(store_path, "goatcounter_periods"), df_new, ["period_start", "period_end"]
+    )
+
+    top_paths = collected.get("top_paths") or []
+    if top_paths:
+        df_new = pd.DataFrame([{
+            "period_start": period_start,
+            "period_end": period_end,
+            "path": p.get("path", ""),
+            "count": p.get("count", 0),
+        } for p in top_paths if p.get("path")])
+        if not df_new.empty:
+            sheets["goatcounter_paths"] = _upsert(
+                _load(store_path, "goatcounter_paths"), df_new, ["period_start", "period_end", "path"]
+            )
+
+    events = collected.get("events") or []
+    if events:
+        df_new = pd.DataFrame([{
+            "period_start": period_start,
+            "period_end": period_end,
+            "event": e.get("event", ""),
+            "count": e.get("count", 0),
+        } for e in events if e.get("event")])
+        if not df_new.empty:
+            sheets["goatcounter_events"] = _upsert(
+                _load(store_path, "goatcounter_events"), df_new, ["period_start", "period_end", "event"]
+            )
+
+
 def _process_mentions(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    """
+    Persist mentions. Matches the flat schema mentions.py returns:
+      HN         → {type, domain, title, url, hn_url, points, num_comments?, created_at}
+      Mastodon   → {created_at, from, content, url}
+      Bluesky    → {created_at, from, content, url}
+      GSC        → {domain, query, page, clicks, impressions, ctr, position}
+    """
     sources = collected.get("sources", {})
 
     hn_hits = sources.get("hacker_news", [])
     if hn_hits:
         df_new = pd.DataFrame([{
-            "object_id": h.get("objectID", ""),
+            "hn_url": h.get("hn_url", ""),
             "type": h.get("type", ""),
+            "domain": h.get("domain", ""),
             "title": h.get("title", ""),
             "url": h.get("url", ""),
-            "points": h.get("points", 0),
-            "num_comments": h.get("num_comments", 0),
+            "points": h.get("points", 0) or 0,
+            "num_comments": h.get("num_comments", 0) or 0,
             "created_at": h.get("created_at", ""),
-            "domain": h.get("domain", ""),
-        } for h in hn_hits if h.get("objectID")])
-        sheets["hn_mentions"] = _upsert(_load(store_path, "hn_mentions"), df_new, ["object_id"])
+        } for h in hn_hits if h.get("hn_url")])
+        if not df_new.empty:
+            sheets["hn_mentions"] = _upsert(_load(store_path, "hn_mentions"), df_new, ["hn_url"])
 
     masto_mentions = sources.get("mastodon", [])
     if masto_mentions:
         df_new = pd.DataFrame([{
-            "notification_id": m.get("id", ""),
-            "account": m.get("account", {}).get("acct", "") if isinstance(m.get("account"), dict) else "",
-            "content": str(m.get("status", {}).get("content", "") if isinstance(m.get("status"), dict) else "")[:300],
+            "url": m.get("url", ""),
+            "from": m.get("from", ""),
+            "content": str(m.get("content", ""))[:300],
             "created_at": m.get("created_at", ""),
-        } for m in masto_mentions if m.get("id")])
-        sheets["mastodon_mentions"] = _upsert(
-            _load(store_path, "mastodon_mentions"), df_new, ["notification_id"]
-        )
+        } for m in masto_mentions if m.get("url")])
+        if not df_new.empty:
+            sheets["mastodon_mentions"] = _upsert(
+                _load(store_path, "mastodon_mentions"), df_new, ["url"]
+            )
 
     bsky_mentions = sources.get("bluesky", [])
     if bsky_mentions:
         df_new = pd.DataFrame([{
-            "uri": m.get("uri", m.get("cid", "")),
-            "author": m.get("author", {}).get("handle", "") if isinstance(m.get("author"), dict) else "",
-            "text": str(m.get("record", {}).get("text", "") if isinstance(m.get("record"), dict) else "")[:300],
-            "indexed_at": m.get("indexedAt", ""),
-        } for m in bsky_mentions])
-        if not df_new.empty and "uri" in df_new.columns:
+            "url": m.get("url", ""),
+            "from": m.get("from", ""),
+            "content": str(m.get("content", ""))[:300],
+            "created_at": m.get("created_at", ""),
+        } for m in bsky_mentions if m.get("url")])
+        if not df_new.empty:
             sheets["bluesky_mentions"] = _upsert(
-                _load(store_path, "bluesky_mentions"), df_new, ["uri"]
+                _load(store_path, "bluesky_mentions"), df_new, ["url"]
             )
 
     gsc_rows = sources.get("google_search_console", [])
     if gsc_rows:
         df_new = pd.DataFrame([{
-            "site": g.get("site", ""),
+            "domain": g.get("domain", ""),
             "query": g.get("query", ""),
             "page": g.get("page", ""),
-            "clicks": g.get("clicks", 0),
-            "impressions": g.get("impressions", 0),
+            "clicks": g.get("clicks", 0) or 0,
+            "impressions": g.get("impressions", 0) or 0,
             "ctr": g.get("ctr"),
             "position": g.get("position"),
             "last_updated": now,
         } for g in gsc_rows])
-        sheets["gsc_queries"] = _upsert(
-            _load(store_path, "gsc_queries"), df_new, ["site", "query", "page"]
-        )
+        if not df_new.empty:
+            sheets["gsc_queries"] = _upsert(
+                _load(store_path, "gsc_queries"), df_new, ["domain", "query", "page"]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -376,10 +531,17 @@ _PROCESSORS = {
     "jetpack": _process_jetpack,
     "linkedin": _process_linkedin,
     "buttondown": _process_buttondown,
-    "vercel": _process_vercel,
+    "posthog": _process_posthog,
     "amazon": _process_amazon,
+    "goatcounter": _process_goatcounter,
     "mentions": _process_mentions,
+    "stripe": _process_stripe,
 }
+
+
+def storable_platforms() -> set[str]:
+    """Platforms with a registered upsert handler — the ones that end up in analytics.xlsx."""
+    return set(_PROCESSORS.keys())
 
 
 def update(collected: dict[str, Any], store_path: Path = STORE_PATH) -> None:

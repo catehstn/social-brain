@@ -47,21 +47,32 @@ def collect_calendly(
                 et["uri"]: et["name"] for et in event_types_raw
             }
 
-            # Fetch scheduled events within the lookback window
+            # Fetch scheduled events within the lookback window.
+            # Active events: no max_start_time so upcoming booked sessions are included.
+            # Canceled events: bounded by now (only past cancellations are relevant).
             now = _utcnow()
-            params = {
-                "user": user_uri,
-                "min_start_time": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "max_start_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "count": 100,
-                "status": "active",
-            }
-            r = client.get(f"{base}/scheduled_events", params=params)
+            r = client.get(
+                f"{base}/scheduled_events",
+                params={
+                    "user": user_uri,
+                    "min_start_time": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "count": 100,
+                    "status": "active",
+                },
+            )
             r.raise_for_status()
             active_events = r.json().get("collection", [])
 
-            params["status"] = "canceled"
-            r = client.get(f"{base}/scheduled_events", params=params)
+            r = client.get(
+                f"{base}/scheduled_events",
+                params={
+                    "user": user_uri,
+                    "min_start_time": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "max_start_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "count": 100,
+                    "status": "canceled",
+                },
+            )
             r.raise_for_status()
             canceled_events = r.json().get("collection", [])
 
