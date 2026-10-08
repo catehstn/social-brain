@@ -233,38 +233,38 @@ class TestTrimData:
         result = analyse._trim_data(data)
         assert result["buttondown"]["newsletters"][0]["subject"] == "Hi"
 
-    # Vercel
-    def test_vercel_keeps_up_to_30_days(self):
-        daily = [{"date": f"2025-01-{i:02d}", "views": i} for i in range(1, 25)]
-        data = {"vercel": {"daily_views": daily}}
+    # PostHog
+    def test_posthog_keeps_up_to_30_days(self):
+        daily = [{"date": f"2025-01-{i:02d}", "page_views": i} for i in range(1, 25)]
+        data = {"posthog": {"daily": daily}}
         result = analyse._trim_data(data)
-        assert len(result["vercel"]["daily_views"]) == 24
+        assert len(result["posthog"]["daily"]) == 24
 
-    def test_vercel_caps_at_30_days(self):
-        daily = [{"date": f"2025-01-{i:02d}", "views": i} for i in range(50)]
-        data = {"vercel": {"daily_views": daily}}
+    def test_posthog_caps_at_30_days(self):
+        daily = [{"date": f"2025-01-{i:02d}", "page_views": i} for i in range(50)]
+        data = {"posthog": {"daily": daily}}
         result = analyse._trim_data(data)
-        assert len(result["vercel"]["daily_views"]) == 30
+        assert len(result["posthog"]["daily"]) == 30
 
-    def test_vercel_keeps_most_recent(self):
+    def test_posthog_keeps_most_recent(self):
         daily = [{"date": str(i)} for i in range(50)]
-        data = {"vercel": {"daily_views": daily}}
+        data = {"posthog": {"daily": daily}}
         result = analyse._trim_data(data)
         # Should be the last 30 entries
-        assert result["vercel"]["daily_views"][0]["date"] == "20"
-        assert result["vercel"]["daily_views"][-1]["date"] == "49"
+        assert result["posthog"]["daily"][0]["date"] == "20"
+        assert result["posthog"]["daily"][-1]["date"] == "49"
 
-    def test_vercel_note_added_when_capped(self):
+    def test_posthog_note_added_when_capped(self):
         daily = [{"date": str(i)} for i in range(50)]
-        data = {"vercel": {"daily_views": daily}}
+        data = {"posthog": {"daily": daily}}
         result = analyse._trim_data(data)
-        assert "daily_views_note" in result["vercel"]
+        assert "daily_note" in result["posthog"]
 
-    def test_vercel_no_note_when_not_capped(self):
+    def test_posthog_no_note_when_not_capped(self):
         daily = [{"date": str(i)} for i in range(10)]
-        data = {"vercel": {"daily_views": daily}}
+        data = {"posthog": {"daily": daily}}
         result = analyse._trim_data(data)
-        assert "daily_views_note" not in result["vercel"]
+        assert "daily_note" not in result["posthog"]
 
     # Upcoming / WordPress
     def test_upcoming_wordpress_truncates_content(self):

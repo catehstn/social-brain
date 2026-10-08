@@ -24,9 +24,11 @@ from collect import (
     collect_mastodon,
     collect_mentions,
     collect_upcoming,
-    collect_vercel,
+    collect_posthog,
     collect_all,
 )
+from collectors.linkedin import _merge_impressions_into_engagement
+from collectors.linkedin_api import collect_linkedin_api
 
 SINCE = datetime(2026, 2, 20, tzinfo=timezone.utc)
 RECENT = "2026-03-01T10:00:00Z"
@@ -134,6 +136,39 @@ class TestCollectMastodon:
         result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
         assert result["posts"][0]["has_attachment"] is True
 
+    def test_new_follows_failure_still_returns_posts(self, respx_mock):
+        """If the notifications API fails, posts already collected are still returned."""
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(200, json=self._account())
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/123/statuses").mock(
+            side_effect=[
+                httpx.Response(200, json=[self._post("p1")]),
+                httpx.Response(200, json=[]),
+            ]
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(401)
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE, access_token="tok")
+        assert result is not None
+        assert len(result["posts"]) == 1
+        assert "new_follows" not in result
+
+    def test_lookup_timeout_returns_none(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            side_effect=httpx.TimeoutException("timed out")
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result is None
+
+    def test_lookup_http_status_error_returns_none(self, respx_mock):
+        respx_mock.get("https://hachyderm.io/api/v1/accounts/lookup").mock(
+            return_value=httpx.Response(500, text="server error")
+        )
+        result = collect_mastodon("hachyderm.io", "cate", since=SINCE)
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # Bluesky
@@ -163,7 +198,7 @@ class TestCollectBluesky:
                 "cursor": None,
             })
         )
-        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        result = collect_bluesky("alice.bsky.social", since=SINCE)
         assert result is not None
         assert result["platform"] == "bluesky"
         assert len(result["posts"]) == 1
@@ -189,7 +224,7 @@ class TestCollectBluesky:
                 "cursor": None,
             })
         )
-        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        result = collect_bluesky("alice.bsky.social", since=SINCE)
         assert len(result["posts"]) == 1
 
     def test_reposts_of_others_skipped(self, respx_mock):
@@ -203,7 +238,7 @@ class TestCollectBluesky:
         respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
             return_value=httpx.Response(200, json={"feed": [repost_item], "cursor": None})
         )
-        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        result = collect_bluesky("alice.bsky.social", since=SINCE)
         assert len(result["posts"]) == 0
 
     def test_cursor_pagination_followed(self, respx_mock):
@@ -222,7 +257,7 @@ class TestCollectBluesky:
                 }),
             ]
         )
-        result = collect_bluesky("catehstn.bsky.social", since=SINCE)
+        result = collect_bluesky("alice.bsky.social", since=SINCE)
         assert len(result["posts"]) == 2
 
     def test_no_app_password_no_follows(self, respx_mock):
@@ -232,7 +267,7 @@ class TestCollectBluesky:
         respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
             return_value=httpx.Response(200, json={"feed": [], "cursor": None})
         )
-        result = collect_bluesky("catehstn.bsky.social", since=SINCE, app_password="")
+        result = collect_bluesky("alice.bsky.social", since=SINCE, app_password="")
         assert "new_follows" not in result
 
 
@@ -386,13 +421,46 @@ class TestCollectButtondown:
         assert "subscriber_tags" not in result
         assert "new_subscribers_by_tag" not in result
 
+    def test_recency_limit_collects_four_newest(self, respx_mock):
+        """Without since, only 4 emails per newsletter are collected."""
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        five_emails = [self._email(f"e{i}", f"Issue {i}", RECENT) for i in range(1, 6)]
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": five_emails, "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 100})
+        )
+        result = collect_buttondown("apikey")  # no since → recency limit
+        assert result is not None
+        assert len(result["newsletters"]) == 4
+
+    def test_ordering_param_sent_newest_first(self, respx_mock):
+        """ordering=-publish_date is included in the emails API request."""
+        respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
+            return_value=httpx.Response(200, json={"results": [self._newsletter()]})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [], "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 100})
+        )
+        collect_buttondown("apikey", since=SINCE)
+        emails_call = next(c for c in respx_mock.calls if "/v1/emails" in str(c.request.url))
+        assert emails_call.request.url.params["ordering"] == "-publish_date"
+
 
 # ---------------------------------------------------------------------------
 # Jetpack
 # ---------------------------------------------------------------------------
 
 class TestCollectJetpack:
-    BASE = "https://public-api.wordpress.com/rest/v1.1/sites/cate.blog/stats"
+    BASE = "https://public-api.wordpress.com/rest/v1.1/sites/example.com/stats"
 
     def _mock_all(self, respx_mock, top_posts_data: dict | None = None):
         respx_mock.get(f"{self.BASE}/visits").mock(
@@ -400,8 +468,8 @@ class TestCollectJetpack:
         )
         respx_mock.get(f"{self.BASE}/top-posts").mock(
             return_value=httpx.Response(200, json=top_posts_data or {"top-posts": [
-                {"href": "https://cate.blog/post-a", "title": "Post A", "views": 80},
-                {"href": "https://cate.blog/post-b", "title": "Post B", "views": 40},
+                {"href": "https://example.com/post-a", "title": "Post A", "views": 80},
+                {"href": "https://example.com/post-b", "title": "Post B", "views": 40},
             ]})
         )
         respx_mock.get(f"{self.BASE}/referrers").mock(
@@ -419,7 +487,7 @@ class TestCollectJetpack:
 
     def test_happy_path(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        result = collect_jetpack("example.com", "token", since=SINCE)
         assert result is not None
         assert result["platform"] == "jetpack"
         assert len(result["daily_views"]) == 2
@@ -427,36 +495,36 @@ class TestCollectJetpack:
 
     def test_top_posts_returned(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        result = collect_jetpack("example.com", "token", since=SINCE)
         assert len(result["top_posts"]) == 2
-        assert result["top_posts"][0]["href"] == "https://cate.blog/post-a"
+        assert result["top_posts"][0]["href"] == "https://example.com/post-a"
 
     def test_referrers_aggregated(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        result = collect_jetpack("example.com", "token", since=SINCE)
         names = {r["name"] for r in result["referrers"]}
         assert "google.com" in names
         assert "twitter.com" in names
 
     def test_top_posts_days_format_aggregated(self, respx_mock):
         days_format = {"days": {
-            "2026-03-01": {"postviews": [{"href": "https://cate.blog/a", "title": "A", "views": 50}]},
-            "2026-03-02": {"postviews": [{"href": "https://cate.blog/a", "title": "A", "views": 30}]},
+            "2026-03-01": {"postviews": [{"href": "https://example.com/a", "title": "A", "views": 50}]},
+            "2026-03-02": {"postviews": [{"href": "https://example.com/a", "title": "A", "views": 30}]},
         }}
         self._mock_all(respx_mock, top_posts_data=days_format)
-        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        result = collect_jetpack("example.com", "token", since=SINCE)
         assert len(result["top_posts"]) == 1
         assert result["top_posts"][0]["views"] == 80  # 50 + 30 aggregated
 
     def test_subscriber_counts_returned(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_jetpack("cate.blog", "token", since=SINCE)
+        result = collect_jetpack("example.com", "token", since=SINCE)
         assert result["email_subscribers"] == 427
         assert result["wpcom_followers"] == 52
 
     def test_auth_failure_returns_none(self, respx_mock):
         respx_mock.get(f"{self.BASE}/visits").mock(return_value=httpx.Response(401))
-        result = collect_jetpack("cate.blog", "badtoken", since=SINCE)
+        result = collect_jetpack("example.com", "badtoken", since=SINCE)
         assert result is None
 
 
@@ -546,6 +614,48 @@ class TestCollectLinkedin:
         with caplog.at_level(logging.WARNING, logger="collectors.linkedin"):
             collect_linkedin(linkedin_drops_dir=tmp_path)
         assert any("days old" in r.message for r in caplog.records)
+
+
+class TestMergeImpressionsIntoEngagement:
+    """The TOP POSTS left-and-right-side merge: a post appears in both lists
+    only when it is top-N by engagement AND top-N by impressions."""
+
+    def test_full_overlap_every_engagement_row_gets_impressions(self):
+        engagement = [{"url": "a", "date": "2026-03-01", "engagements": 10},
+                      {"url": "b", "date": "2026-03-02", "engagements": 20}]
+        impressions = [{"url": "a", "impressions": 100},
+                       {"url": "b", "impressions": 200}]
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert engagement[0]["impressions"] == 100
+        assert engagement[1]["impressions"] == 200
+        # Other fields are preserved.
+        assert engagement[0]["engagements"] == 10
+        assert engagement[1]["date"] == "2026-03-02"
+
+    def test_partial_overlap_leaves_missing_rows_without_the_key(self):
+        """A row absent from the right-side table has an unknown impressions
+        count — the key is omitted so Claude's rate-rendering doesn't treat
+        null as zero and emit nonsense."""
+        engagement = [{"url": "a"}, {"url": "b"}]
+        impressions = [{"url": "a", "impressions": 100}]  # no "b"
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert engagement[0] == {"url": "a", "impressions": 100}
+        assert engagement[1] == {"url": "b"}  # no impressions key at all
+        assert "impressions" not in engagement[1]
+
+    def test_empty_right_table_leaves_engagement_unchanged(self):
+        engagement = [{"url": "a"}]
+        _merge_impressions_into_engagement(engagement, [])
+        assert engagement == [{"url": "a"}]
+
+    def test_none_impressions_in_right_table_is_treated_as_unknown(self):
+        """pandas-parsed rows can carry impressions=None where the cell was
+        empty. Those should not become false 'impressions=None' assertions on
+        the engagement row."""
+        engagement = [{"url": "a"}]
+        impressions = [{"url": "a", "impressions": None}]
+        _merge_impressions_into_engagement(engagement, impressions)
+        assert "impressions" not in engagement[0]
 
 
 # ---------------------------------------------------------------------------
@@ -852,48 +962,178 @@ class TestCollectAmazon:
 
 
 # ---------------------------------------------------------------------------
-# Vercel
+# PostHog
 # ---------------------------------------------------------------------------
 
-class TestCollectVercel:
-    BASE = "https://vercel.com/api/web-analytics"
+class TestCollectPosthog:
+    HOST = "https://us.i.posthog.com"
+    URL = f"{HOST}/api/projects/42/query/"
+    FILTER = "www.example.com"
 
-    def _mock_all(self, respx_mock):
-        respx_mock.get(f"{self.BASE}/overview").mock(
-            return_value=httpx.Response(200, json={"total": 1000, "devices": 800, "bounceRate": 45.0})
-        )
-        respx_mock.get(f"{self.BASE}/timeseries").mock(
-            return_value=httpx.Response(200, json={"data": {"groups": {"all": [
-                {"key": "2026-03-01", "total": 500, "devices": 400},
-                {"key": "2026-03-02", "total": 500, "devices": 400},
-            ]}}}),
-        )
-        respx_mock.get(f"{self.BASE}/stats").mock(
-            return_value=httpx.Response(200, json={"data": [{"key": "/", "total": 300, "devices": 250}]})
-        )
+    def _mock_all(self, respx_mock,
+                  overview=(1000, 800),
+                  daily=((["2026-03-01", 500, 400], ["2026-03-02", 500, 400])),
+                  top_pages=((["/", 300, 250],)),
+                  top_refs=((["cate.blog", 120],)),
+                  distinct_hosts=None):
+        """
+        Mock the four core HogQL calls, plus an optional fifth distinct-hosts
+        diagnostic (fired only when no host_filter is set).
+        """
+        responses = [
+            httpx.Response(200, json={"results": [list(overview)]}),
+            httpx.Response(200, json={"results": [list(r) for r in daily]}),
+            httpx.Response(200, json={"results": [list(r) for r in top_pages]}),
+            httpx.Response(200, json={"results": [list(r) for r in top_refs]}),
+        ]
+        if distinct_hosts is not None:
+            responses.append(httpx.Response(200, json={"results": distinct_hosts}))
+        respx_mock.post(self.URL).mock(side_effect=responses)
 
     def test_happy_path(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_vercel("tok", "my-project", since=SINCE)
+        result = collect_posthog("phx_key", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
         assert result is not None
-        assert result["platform"] == "vercel"
+        assert result["platform"] == "posthog"
         assert result["page_views"] == 1000
         assert result["visitors"] == 800
         assert len(result["daily"]) == 2
-
-    def test_daily_entries_mapped(self, respx_mock):
-        self._mock_all(respx_mock)
-        result = collect_vercel("tok", "my-project", since=SINCE)
         assert result["daily"][0] == {"date": "2026-03-01", "page_views": 500, "visitors": 400}
+        assert result["top_pages"][0] == {"path": "/", "page_views": 300, "visitors": 250}
+        assert result["top_referrers"][0] == {"referrer": "cate.blog", "page_views": 120}
+        assert result["host_filter"] == [self.FILTER]
 
-    def test_with_team_id_does_not_crash(self, respx_mock):
-        self._mock_all(respx_mock)
-        result = collect_vercel("tok", "my-project", team_id="team_abc", since=SINCE)
+    def test_overview_failure_returns_none(self, respx_mock):
+        respx_mock.post(self.URL).mock(return_value=httpx.Response(401, text="unauthorised"))
+        result = collect_posthog("bad_key", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
+        assert result is None
+
+    def test_daily_failure_returns_empty_list(self, respx_mock):
+        respx_mock.post(self.URL).mock(side_effect=[
+            httpx.Response(200, json={"results": [[100, 80]]}),
+            httpx.Response(500, text="oops"),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+        ])
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
         assert result is not None
+        assert result["page_views"] == 100
+        assert result["daily"] == []
 
-    def test_api_error_returns_none(self, respx_mock):
-        respx_mock.get(f"{self.BASE}/overview").mock(return_value=httpx.Response(401))
-        result = collect_vercel("badtok", "my-project", since=SINCE)
+    def test_default_host(self, respx_mock):
+        respx_mock.post("https://us.i.posthog.com/api/projects/42/query/").mock(
+            side_effect=[
+                httpx.Response(200, json={"results": [[0, 0]]}),      # overview
+                httpx.Response(200, json={"results": []}),            # daily
+                httpx.Response(200, json={"results": []}),            # top_pages
+                httpx.Response(200, json={"results": []}),            # top_referrers
+            ]
+        )
+        result = collect_posthog("k", "42", since=SINCE, host_filter=self.FILTER)
+        assert result is not None
+        assert result["page_views"] == 0
+
+    def test_empty_results_still_valid(self, respx_mock):
+        self._mock_all(respx_mock, overview=(0, 0), daily=(), top_pages=(), top_refs=())
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
+        assert result["page_views"] == 0
+        assert result["visitors"] == 0
+        assert result["daily"] == []
+        assert result["top_pages"] == []
+        assert result["top_referrers"] == []
+
+    # --- host_filter behaviour -----------------------------------------
+
+    def test_host_filter_injected_into_queries(self, respx_mock):
+        """When host_filter is set, every query body must include the filter."""
+        route = respx_mock.post(self.URL).mock(side_effect=[
+            httpx.Response(200, json={"results": [[10, 5]]}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+        ])
+        collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                        host_filter="www.example.com")
+        # respx captures each call in .calls; check each request body includes the filter clause
+        for call in route.calls:
+            body = call.request.content.decode()
+            assert "properties.$host = 'www.example.com'" in body
+
+    def test_host_filter_list(self, respx_mock):
+        respx_mock.post(self.URL).mock(side_effect=[
+            httpx.Response(200, json={"results": [[10, 5]]}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+        ])
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=["www.a.com", "www.b.com"])
+        assert result["host_filter"] == ["www.a.com", "www.b.com"]
+
+    def test_invalid_host_filter_dropped(self, respx_mock, caplog):
+        """Values that aren't plain hostnames are dropped with a warning."""
+        respx_mock.post(self.URL).mock(side_effect=[
+            httpx.Response(200, json={"results": [[10, 5]]}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(200, json={"results": []}),  # distinct-hosts diagnostic
+        ])
+        with caplog.at_level("WARNING"):
+            result = collect_posthog(
+                "k", "42", host=self.HOST, since=SINCE,
+                host_filter=["www.good.com' OR 1=1--", ""],
+            )
+        # Both entries invalid → no filter applied
+        assert result["host_filter"] == []
+        assert any("invalid hostname" in m for m in [r.getMessage() for r in caplog.records])
+
+    def test_no_filter_multiple_hosts_warns(self, respx_mock, caplog):
+        """When no host_filter is set and multiple $host values exist, warn."""
+        self._mock_all(
+            respx_mock,
+            distinct_hosts=[["www.prod.com", 100], ["preview.example.com", 30]],
+        )
+        with caplog.at_level("WARNING"):
+            collect_posthog("k", "42", host=self.HOST, since=SINCE)
+        msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("no host_filter" in m and "preview.example.com" in m for m in msgs)
+
+    def test_no_filter_single_host_no_warning(self, respx_mock, caplog):
+        """No warning when there's genuinely only one host."""
+        self._mock_all(
+            respx_mock,
+            distinct_hosts=[["www.only.com", 500]],
+        )
+        with caplog.at_level("WARNING"):
+            collect_posthog("k", "42", host=self.HOST, since=SINCE)
+        assert not any("no host_filter" in m for m in [r.getMessage() for r in caplog.records])
+
+    # --- defensive parsing --------------------------------------------
+
+    def test_malformed_daily_row_skipped(self, respx_mock):
+        """A row that's too short must not crash the collector."""
+        self._mock_all(
+            respx_mock,
+            daily=([["2026-03-01", 500, 400], ["short"]]),
+        )
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
+        assert len(result["daily"]) == 1
+        assert result["daily"][0]["date"] == "2026-03-01"
+
+    def test_non_json_response_returns_none(self, respx_mock):
+        """A 200 with a non-JSON body (proxy error page) must not crash."""
+        respx_mock.post(self.URL).mock(return_value=httpx.Response(
+            200, content=b"<html>proxy 502 error</html>",
+            headers={"content-type": "text/html"},
+        ))
+        result = collect_posthog("k", "42", host=self.HOST, since=SINCE,
+                                 host_filter=self.FILTER)
         assert result is None
 
 
@@ -902,7 +1142,7 @@ class TestCollectVercel:
 # ---------------------------------------------------------------------------
 
 class TestCollectGoatcounter:
-    BASE = "https://what-raccoon.goatcounter.com/api/v0"
+    BASE = "https://mysite.goatcounter.com/api/v0"
 
     def _mock_all(self, respx_mock, hits=None, total=None):
         respx_mock.get(f"{self.BASE}/stats/total").mock(
@@ -919,7 +1159,7 @@ class TestCollectGoatcounter:
 
     def test_happy_path_returns_data(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        result = collect_goatcounter("mysite", "token", since=SINCE)
         assert result is not None
         assert result["platform"] == "goatcounter"
         assert result["total_visitors"] == 1500
@@ -927,40 +1167,122 @@ class TestCollectGoatcounter:
 
     def test_page_paths_in_top_paths(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        result = collect_goatcounter("mysite", "token", since=SINCE)
         paths = [h["path"] for h in result["top_paths"]]
         assert "/" in paths
         assert "/about" in paths
 
     def test_events_separated_from_paths(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        result = collect_goatcounter("mysite", "token", since=SINCE)
         events = [e["event"] for e in result["events"]]
         assert "result/trike" in events
         assert "result/mpr" in events
 
     def test_events_not_in_top_paths(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        result = collect_goatcounter("mysite", "token", since=SINCE)
         paths = [h["path"] for h in result["top_paths"]]
         assert not any(p.startswith("result/") for p in paths)
 
     def test_no_events_returns_empty_list(self, respx_mock):
         self._mock_all(respx_mock, hits=[{"path": "/", "event": False, "count": 500}])
-        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        result = collect_goatcounter("mysite", "token", since=SINCE)
         assert result["events"] == []
 
     def test_api_error_returns_none(self, respx_mock):
         respx_mock.get(f"{self.BASE}/stats/total").mock(
             return_value=httpx.Response(401, json={"error": "unauthorized"})
         )
-        result = collect_goatcounter("what-raccoon", "badtoken", since=SINCE)
+        result = collect_goatcounter("mysite", "badtoken", since=SINCE)
         assert result is None
 
     def test_period_dates_in_result(self, respx_mock):
         self._mock_all(respx_mock)
-        result = collect_goatcounter("what-raccoon", "token", since=SINCE)
+        result = collect_goatcounter("mysite", "token", since=SINCE)
         assert result["period_start"] == SINCE.strftime("%Y-%m-%d")
+
+    def test_null_hits_field_returns_empty_lists(self, respx_mock):
+        """API returning {"hits": null} is handled safely (not a TypeError)."""
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(200, json={"total": 5, "total_events": 0})
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(200, json={"hits": None})
+        )
+        result = collect_goatcounter("mysite", "token", since=SINCE)
+        assert result is not None
+        assert result["top_paths"] == []
+        assert result["events"] == []
+
+    def test_timeout_returns_none(self, respx_mock, monkeypatch):
+        """A persistent timeout is caught and returns None after retry."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            side_effect=httpx.TimeoutException("timed out")
+        )
+        result = collect_goatcounter("mysite", "token", since=SINCE)
+        assert result is None
+
+    def test_hits_api_error_returns_none(self, respx_mock, monkeypatch):
+        """Non-2xx on stats/hits (after stats/total succeeds) returns None
+        after the retry on 429 also fails."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(200, json={"total": 5, "total_events": 0})
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(429, json={"error": "rate limited"})
+        )
+        result = collect_goatcounter("mysite", "token", since=SINCE)
+        assert result is None
+
+    def test_transient_5xx_recovers_on_retry(self, respx_mock, monkeypatch):
+        """A single 503 followed by a 200 succeeds — retry recovers the run."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            side_effect=[
+                httpx.Response(503, text="upstream busy"),
+                httpx.Response(200, json={"total": 42, "total_events": 3}),
+            ]
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        result = collect_goatcounter("mysite", "token", since=SINCE)
+        assert result is not None
+        assert result["total_visitors"] == 42
+
+    def test_timeout_recovers_on_retry(self, respx_mock, monkeypatch):
+        """A single timeout followed by a 200 succeeds — retry recovers."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        respx_mock.get(f"{self.BASE}/stats/total").mock(
+            side_effect=[
+                httpx.TimeoutException("first attempt timed out"),
+                httpx.Response(200, json={"total": 7, "total_events": 1}),
+            ]
+        )
+        respx_mock.get(f"{self.BASE}/stats/hits").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        result = collect_goatcounter("mysite", "token", since=SINCE)
+        assert result is not None
+        assert result["total_visitors"] == 7
+
+    def test_auth_error_not_retried(self, respx_mock, monkeypatch):
+        """401/403 must NOT trigger a retry — bad token won't fix itself."""
+        import collectors.goatcounter as gc
+        monkeypatch.setattr(gc, "_RETRY_BACKOFF_SECONDS", 0)
+        route = respx_mock.get(f"{self.BASE}/stats/total").mock(
+            return_value=httpx.Response(401, json={"error": "unauthorized"})
+        )
+        result = collect_goatcounter("mysite", "badtoken", since=SINCE)
+        assert result is None
+        assert route.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -986,7 +1308,7 @@ class TestCollectMentions:
         hn.mock(side_effect=lambda req: httpx.Response(200, json={"hits": [
             _hn_hit(req.url.params["query"], req.url.params["tags"])
         ]}))
-        result = collect_mentions(domains=["cate.blog"], since=SINCE)
+        result = collect_mentions(domains=["example.com"], since=SINCE)
         assert hn.call_count == 2  # story + comment
         assert result is not None
 
@@ -995,7 +1317,7 @@ class TestCollectMentions:
         hn.mock(side_effect=lambda req: httpx.Response(200, json={"hits": [
             _hn_hit(req.url.params["query"], req.url.params["tags"])
         ]}))
-        domains = ["cate.blog", "driyourcareer.com", "whatsmyjob.club"]
+        domains = ["example.com", "example.org", "example.net"]
         collect_mentions(domains=domains, since=SINCE)
         assert hn.call_count == len(domains) * 2
 
@@ -1004,7 +1326,7 @@ class TestCollectMentions:
         hn.mock(side_effect=lambda req: httpx.Response(200, json={"hits": [
             _hn_hit(req.url.params["query"], req.url.params["tags"])
         ]}))
-        domains = ["cate.blog", "driyourcareer.com"]
+        domains = ["example.com", "example.org"]
         collect_mentions(domains=domains, since=SINCE)
         queried = {req.url.params["query"] for req, _ in hn.calls}
         assert queried == set(domains)
@@ -1016,7 +1338,7 @@ class TestCollectMentions:
                  "points": 5, "num_comments": 0, "created_at": RECENT[:10], "author": "user"},
             ]})
         )
-        result = collect_mentions(domains=["cate.blog"], since=SINCE)
+        result = collect_mentions(domains=["example.com"], since=SINCE)
         assert result["sources"]["hacker_news"] == []
 
     def test_no_mastodon_token_skips_mastodon(self, respx_mock):
@@ -1024,7 +1346,7 @@ class TestCollectMentions:
             return_value=httpx.Response(200, json={"hits": []})
         )
         result = collect_mentions(
-            domains=["cate.blog"], since=SINCE,
+            domains=["example.com"], since=SINCE,
             mastodon_instance="hachyderm.io", mastodon_access_token="",
         )
         assert "mastodon" not in result["sources"]
@@ -1040,11 +1362,104 @@ class TestCollectMentions:
             ], headers={})
         )
         result = collect_mentions(
-            domains=["cate.blog"], since=SINCE,
+            domains=["example.com"], since=SINCE,
             mastodon_instance="hachyderm.io", mastodon_access_token="tok",
         )
         assert "mastodon" in result["sources"]
         assert result["sources"]["mastodon"][0]["from"] == "friend@m.social"
+
+    def test_mastodon_mention_url_points_at_local_remote_user(self, respx_mock):
+        """Remote-user mention: URL rewrites to our instance so Cate can
+        interact (fav, boost, reply) while logged in. The local status id
+        and the remote-URL id are deliberately different so this proves
+        the local id is read from `status.id` rather than parsed from the
+        remote URL."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {"acct": "friend@m.social"},
+                 "status": {"id": "99", "content": "<p>hi</p>",
+                            "url": "https://m.social/@friend/12345"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert result["sources"]["mastodon"][0]["url"] == \
+            "https://hachyderm.io/@friend@m.social/99"
+
+    def test_mastodon_mention_url_points_at_local_local_user(self, respx_mock):
+        """Local-user mention (acct is a bare username with no @domain):
+        URL stays on our instance with the bare handle."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                {"created_at": RECENT, "account": {"acct": "localpal"},
+                 "status": {"id": "7777", "content": "<p>hi</p>",
+                            "url": "https://hachyderm.io/@localpal/7777"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        assert result["sources"]["mastodon"][0]["url"] == \
+            "https://hachyderm.io/@localpal/7777"
+
+    def test_mastodon_mention_tolerates_null_account_and_status(self, respx_mock):
+        """Mastodon returns `null` (not an empty object) for the account/status
+        of deleted or suspended authors, and sometimes returns the key with a
+        `null` value for individual fields (an acct that failed webfinger, a
+        moderated status whose content is redacted). The parser must not
+        crash on any of these shapes, must not pass `None` downstream as a
+        string, and the rest of the batch must still be collected."""
+        respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=httpx.Response(200, json={"hits": []})
+        )
+        respx_mock.get("https://hachyderm.io/api/v1/notifications").mock(
+            return_value=httpx.Response(200, json=[
+                # Deleted author — account is null.
+                {"created_at": RECENT, "account": None,
+                 "status": {"id": "97", "content": "x",
+                            "url": "https://m.social/@gone/97"}},
+                # Deleted status — status is null.
+                {"created_at": RECENT, "account": {"acct": "friend@m.social"},
+                 "status": None},
+                # Key present, value null — webfinger-failed acct AND
+                # redacted/moderated content.
+                {"created_at": RECENT, "account": {"acct": None},
+                 "status": {"id": "88", "content": None,
+                            "url": "https://m.social/@x/88"}},
+                # Alongside a healthy one, to prove the batch isn't dropped.
+                {"created_at": RECENT, "account": {"acct": "ok@m.social"},
+                 "status": {"id": "77", "content": "hi",
+                            "url": "https://m.social/@ok/42"}},
+            ], headers={})
+        )
+        result = collect_mentions(
+            domains=["cate.blog"], since=SINCE,
+            mastodon_instance="hachyderm.io", mastodon_access_token="tok",
+        )
+        mastodon = result["sources"]["mastodon"]
+        # All four survived — no null field aborted the batch.
+        assert len(mastodon) == 4
+        # Null account → acct is "", URL falls back to the status URL.
+        assert mastodon[0]["from"] == ""
+        assert mastodon[0]["url"] == "https://m.social/@gone/97"
+        # Null status → status_id is "", URL is "" from the fallback.
+        assert mastodon[1]["from"] == "friend@m.social"
+        assert mastodon[1]["url"] == ""
+        # Null-valued acct AND null-valued content → both coerced to ""
+        # rather than left as None.
+        assert mastodon[2]["from"] == ""
+        assert mastodon[2]["content"] == ""
+        # Healthy one still gets the local-instance URL (id 77, not 42).
+        assert mastodon[3]["url"] == "https://hachyderm.io/@ok@m.social/77"
 
     def test_mastodon_pagination_capped(self, respx_mock):
         respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
@@ -1057,7 +1472,7 @@ class TestCollectMentions:
              "status": {"content": "hi", "url": ""}}
         ], headers={"Link": next_link}))
         collect_mentions(
-            domains=["cate.blog"], since=SINCE,
+            domains=["example.com"], since=SINCE,
             mastodon_instance="hachyderm.io", mastodon_access_token="tok",
         )
         assert masto.call_count <= 5
@@ -1067,8 +1482,8 @@ class TestCollectMentions:
             return_value=httpx.Response(200, json={"hits": []})
         )
         result = collect_mentions(
-            domains=["cate.blog"], since=SINCE,
-            bluesky_handle="catehstn.bsky.social", bluesky_app_password="",
+            domains=["example.com"], since=SINCE,
+            bluesky_handle="alice.bsky.social", bluesky_app_password="",
         )
         assert "bluesky" not in result["sources"]
 
@@ -1088,8 +1503,8 @@ class TestCollectMentions:
             ], "cursor": None})
         )
         result = collect_mentions(
-            domains=["cate.blog"], since=SINCE,
-            bluesky_handle="catehstn.bsky.social", bluesky_app_password="pass",
+            domains=["example.com"], since=SINCE,
+            bluesky_handle="alice.bsky.social", bluesky_app_password="pass",
         )
         assert "bluesky" in result["sources"]
         assert result["sources"]["bluesky"][0]["from"] == "friend.bsky.social"
@@ -1110,8 +1525,8 @@ class TestCollectMentions:
             ], "cursor": None})
         )
         result = collect_mentions(
-            domains=["cate.blog"], since=SINCE,
-            bluesky_handle="catehstn.bsky.social", bluesky_app_password="pass",
+            domains=["example.com"], since=SINCE,
+            bluesky_handle="alice.bsky.social", bluesky_app_password="pass",
         )
         assert result["sources"]["bluesky"] == []
 
@@ -1119,7 +1534,7 @@ class TestCollectMentions:
         respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
             return_value=httpx.Response(200, json={"hits": []})
         )
-        result = collect_mentions(domains=["cate.blog"], since=SINCE, gsc_credentials_file="")
+        result = collect_mentions(domains=["example.com"], since=SINCE, gsc_credentials_file="")
         assert "google_search_console" not in result["sources"]
 
     def test_gsc_domain_property_success(self, tmp_path, respx_mock):
@@ -1130,14 +1545,14 @@ class TestCollectMentions:
         )
         mock_service = MagicMock()
         mock_service.searchanalytics().query().execute.return_value = {
-            "rows": [{"keys": ["engineering mgmt", "https://cate.blog/p"],
+            "rows": [{"keys": ["engineering mgmt", "https://example.com/p"],
                       "clicks": 5, "impressions": 100, "ctr": 0.05, "position": 8.0}]
         }
         with patch("google.oauth2.service_account.Credentials") as mock_creds, \
              patch("googleapiclient.discovery.build", return_value=mock_service):
             mock_creds.from_service_account_file.return_value = MagicMock()
             result = collect_mentions(
-                domains=["cate.blog"], since=SINCE,
+                domains=["example.com"], since=SINCE,
                 gsc_credentials_file=str(creds_file),
             )
         assert "google_search_console" in result["sources"]
@@ -1157,7 +1572,7 @@ class TestCollectMentions:
              caplog.at_level(logging.WARNING, logger="collectors.mentions"):
             mock_creds.from_service_account_file.return_value = MagicMock()
             result = collect_mentions(
-                domains=["cate.blog"], since=SINCE,
+                domains=["example.com"], since=SINCE,
                 gsc_credentials_file=str(creds_file),
             )
         assert result is not None
@@ -1181,7 +1596,7 @@ class TestCollectMentions:
         mock_service = MagicMock()
         mock_service.searchanalytics().query.side_effect = fake_query
 
-        domains = ["cate.blog", "driyourcareer.com", "whatsmyjob.club"]
+        domains = ["example.com", "example.org", "example.net"]
         with patch("google.oauth2.service_account.Credentials") as mock_creds, \
              patch("googleapiclient.discovery.build", return_value=mock_service):
             mock_creds.from_service_account_file.return_value = MagicMock()
@@ -1197,8 +1612,240 @@ class TestCollectMentions:
         respx_mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
             side_effect=httpx.ConnectError("connection failed")
         )
-        result = collect_mentions(domains=["cate.blog"], since=SINCE)
+        result = collect_mentions(domains=["example.com"], since=SINCE)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn API collector
+# ---------------------------------------------------------------------------
+
+_LI_BASE = "https://api.linkedin.com"
+
+
+def _li_post_element(
+    urn: str = "urn:li:share:1",
+    text: str = "Hello LinkedIn",
+    created_ms: int = 1_775_000_000_000,  # ~2026-03-29 (after SINCE=2026-02-20)
+    permalink: str | None = None,
+) -> dict:
+    return {
+        "urn": urn,
+        "snapshotData": {
+            "urn": urn,
+            "commentary": text,
+            "created": {"time": created_ms},
+            "permalink": permalink or f"https://www.linkedin.com/posts/{urn.split(':')[-1]}",
+        },
+    }
+
+
+def _li_analytics_element(metric_type: str, value: int) -> dict:
+    return {"type": metric_type, "value": value}
+
+
+class TestCollectLinkedinApi:
+    def test_no_token_returns_none(self):
+        result = collect_linkedin_api("")
+        assert result is None
+
+    def test_happy_path_returns_data(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                _li_analytics_element("IMPRESSION", 500),
+                _li_analytics_element("REACTION", 10),
+                _li_analytics_element("COMMENT", 3),
+                _li_analytics_element("RESHARE", 2),
+                _li_analytics_element("LINK_CLICK", 20),
+                _li_analytics_element("MEMBERS_REACHED", 400),
+            ]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert result["platform"] == "linkedin"
+        assert result["source"] == "api"
+        assert len(result["posts"]) == 1
+        post = result["posts"][0]
+        assert post["text"] == "Hello LinkedIn"
+        assert post["impressions"] == 500
+        assert post["reactions"] == 10
+        assert post["comments"] == 3
+        assert post["shares"] == 2
+        assert post["clicks"] == 20
+        assert post["members_reached"] == 400
+
+    def test_summary_totals_computed(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                _li_analytics_element("IMPRESSION", 300),
+                _li_analytics_element("REACTION", 5),
+            ]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result["summary"]["total_impressions"] == 300
+        assert result["summary"]["total_reactions"] == 5
+        assert result["summary"]["post_count"] == 1
+
+    def test_posts_before_since_excluded(self, respx_mock):
+        # created_ms for 2024-01-01 — well before SINCE (2026-02-20)
+        old_ms = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                _li_post_element(urn="urn:li:share:1", created_ms=int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp() * 1000)),
+                _li_post_element(urn="urn:li:share:2", created_ms=old_ms),
+            ]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["urn"] == "urn:li:share:1"
+
+    def test_pagination_followed(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            side_effect=[
+                httpx.Response(200, json={"elements": [_li_post_element("urn:li:share:1")] * 50}),
+                httpx.Response(200, json={"elements": [_li_post_element("urn:li:share:2")]}),
+                httpx.Response(200, json={"elements": []}),
+            ]
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert len(result["posts"]) == 51  # 50 + 1 from second page
+
+    def test_401_returns_none(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(401, json={"message": "Unauthorized"})
+        )
+        result = collect_linkedin_api("bad_token", since=SINCE)
+        assert result is None
+
+    def test_403_returns_none(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(403, json={"message": "Forbidden"})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is None
+
+    def test_network_error_returns_none(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            side_effect=httpx.ConnectError("connection failed")
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is None
+
+    def test_analytics_failure_for_one_post_still_returns_post(self, respx_mock, monkeypatch):
+        """If per-post analytics fail after all retries, post included with zero metrics."""
+        monkeypatch.setattr("collectors.linkedin_api.time.sleep", lambda s: None)
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            return_value=httpx.Response(429, json={"message": "Rate limit exceeded"})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["impressions"] == 0
+
+    def test_analytics_429_retried_and_succeeds(self, respx_mock, monkeypatch):
+        """429 on first analytics attempt is retried; metrics populated on second attempt."""
+        sleep_calls: list[float] = []
+        monkeypatch.setattr("collectors.linkedin_api.time.sleep", lambda s: sleep_calls.append(s))
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            side_effect=[
+                httpx.Response(429, json={"message": "Rate limit"}),
+                httpx.Response(200, json={"elements": [_li_analytics_element("IMPRESSION", 100)]}),
+            ]
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result["posts"][0]["impressions"] == 100
+        assert len(sleep_calls) == 1
+
+    def test_analytics_retry_after_header_respected(self, respx_mock, monkeypatch):
+        """Retry-After header value is used as the sleep delay."""
+        sleep_calls: list[float] = []
+        monkeypatch.setattr("collectors.linkedin_api.time.sleep", lambda s: sleep_calls.append(s))
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": [_li_post_element()]})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberCreatorPostAnalytics").mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "5"}, json={}),
+                httpx.Response(200, json={"elements": []}),
+            ]
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        collect_linkedin_api("tok", since=SINCE)
+        assert sleep_calls == [5.0]
+
+    def test_changelogs_included_in_result(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": [
+                {"type": "SHARE_CREATE", "timestamp": 1_740_000_000_000},
+            ]})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert len(result["changelogs"]) == 1
+
+    def test_changelogs_failure_does_not_crash(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            side_effect=httpx.ConnectError("failed")
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert result["changelogs"] == []
+
+    def test_empty_posts_returns_valid_result(self, respx_mock):
+        respx_mock.get(f"{_LI_BASE}/rest/memberSnapshotData").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        respx_mock.get(f"{_LI_BASE}/rest/memberChangeLogs").mock(
+            return_value=httpx.Response(200, json={"elements": []})
+        )
+        result = collect_linkedin_api("tok", since=SINCE)
+        assert result is not None
+        assert result["posts"] == []
+        assert result["summary"]["post_count"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1219,16 +1866,16 @@ class TestCollectAll:
         assert "buttondown" not in result
 
     def test_missing_jetpack_token_skips(self):
-        result = collect_all({"jetpack_site": "cate.blog"}, platform="jetpack", since=SINCE)
+        result = collect_all({"jetpack_site": "example.com"}, platform="jetpack", since=SINCE)
         assert "jetpack" not in result
 
     def test_missing_amazon_asins_skips(self):
         result = collect_all({}, platform="amazon", since=SINCE)
         assert "amazon" not in result
 
-    def test_missing_vercel_token_skips(self):
-        result = collect_all({"vercel_project_id": "proj"}, platform="vercel", since=SINCE)
-        assert "vercel" not in result
+    def test_missing_posthog_key_skips(self):
+        result = collect_all({"posthog_project_id": "42"}, platform="posthog", since=SINCE)
+        assert "posthog" not in result
 
     def test_missing_monitored_domains_skips_mentions(self):
         result = collect_all({}, platform="mentions", since=SINCE)
@@ -1239,7 +1886,7 @@ class TestCollectAll:
         assert "goatcounter" not in result
 
     def test_missing_goatcounter_token_skips(self):
-        result = collect_all({"goatcounter_site": "what-raccoon"}, platform="goatcounter", since=SINCE)
+        result = collect_all({"goatcounter_site": "mysite"}, platform="goatcounter", since=SINCE)
         assert "goatcounter" not in result
 
     def test_missing_calendly_token_skips(self):
@@ -1262,6 +1909,51 @@ class TestCollectAll:
         }
         collect_all(config, platform="mastodon", since=SINCE)
         assert called == ["mastodon"]
+
+    def test_linkedin_api_used_when_token_configured(self, monkeypatch):
+        """When linkedin_access_token is set, collect_linkedin_api is called instead of collect_linkedin."""
+        api_called = []
+        file_called = []
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin_api",
+            lambda tok, **kw: api_called.append(tok) or {"platform": "linkedin", "posts": []},
+        )
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin",
+            lambda **kw: file_called.append(True) or {"platform": "linkedin", "posts": []},
+        )
+        config = {"linkedin_access_token": "my_token"}
+        result = collect_all(config, platform="linkedin", since=SINCE)
+        assert api_called == ["my_token"]
+        assert file_called == []
+        assert "linkedin" in result
+
+    def test_linkedin_file_drop_used_when_no_token(self, monkeypatch):
+        """When linkedin_access_token is absent, collect_linkedin (file-drop) is called."""
+        api_called = []
+        file_called = []
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin_api",
+            lambda tok, **kw: api_called.append(tok) or {"platform": "linkedin", "posts": []},
+        )
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin",
+            lambda **kw: file_called.append(True) or {"platform": "linkedin", "posts": []},
+        )
+        config = {}
+        collect_all(config, platform="linkedin", since=SINCE)
+        assert api_called == []
+        assert file_called == [True]
+
+    def test_linkedin_api_none_result_absent_from_results(self, monkeypatch):
+        """If collect_linkedin_api returns None, linkedin is absent from results."""
+        monkeypatch.setattr(
+            "collectors._dispatch.collect_linkedin_api",
+            lambda tok, **kw: None,
+        )
+        config = {"linkedin_access_token": "tok"}
+        result = collect_all(config, platform="linkedin", since=SINCE)
+        assert "linkedin" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -1410,6 +2102,39 @@ class TestCollectCalendly:
         result = collect_calendly("tok", since=SINCE, lead_gen_event="Nonexistent Event")
         assert result["lead_gen_bookings"] == 0
 
+    def test_active_events_fetched_without_max_start_time(self, respx_mock):
+        """Active events have no max_start_time so future-scheduled bookings are counted."""
+        _calendly_mock(respx_mock)
+        active_request = None
+
+        def side_effect(request):
+            nonlocal active_request
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                active_request = request
+                return httpx.Response(200, json={"collection": []})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        collect_calendly("tok", since=SINCE)
+        assert active_request is not None
+        assert "max_start_time" not in dict(active_request.url.params)
+
+    def test_upcoming_booking_counted(self, respx_mock):
+        """A booking whose session start is in the future is still counted as active."""
+        _calendly_mock(respx_mock)
+        future_event = [{"event_type": ET_URI_INTRO}]
+
+        def side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": future_event})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(side_effect=side_effect)
+        result = collect_calendly("tok", since=SINCE)
+        assert result["total_bookings"] == 1
+
     def test_no_lead_gen_event_omits_field(self, respx_mock):
         _calendly_mock(respx_mock)
         respx_mock.get("https://api.calendly.com/scheduled_events").mock(
@@ -1516,13 +2241,13 @@ class TestCollectUpcoming:
         assert subjects == {"Issue A", "Issue B"}
 
     def test_includes_newsletter_name_in_each_email(self, respx_mock):
-        _buttondown_newsletters_mock(respx_mock, [self._newsletter("DRI Your Career", "dri-key")])
+        _buttondown_newsletters_mock(respx_mock, [self._newsletter("Example Newsletter", "dri-key")])
         respx_mock.get("https://api.buttondown.email/v1/emails").mock(
             return_value=httpx.Response(200, json={"results": [self._scheduled_email()]})
         )
         result = collect_upcoming(buttondown_api_key="master-key")
         email = result["sources"]["buttondown"][0]
-        assert email["newsletter"] == "DRI Your Career"
+        assert email["newsletter"] == "Example Newsletter"
 
     def test_strips_html_from_content(self, respx_mock):
         _buttondown_newsletters_mock(respx_mock, [self._newsletter()])

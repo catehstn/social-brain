@@ -15,11 +15,17 @@ import yaml
 
 import run
 from run import since_last_run
+from store import storable_platforms as _real_storable_platforms
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Mirror of store.storable_platforms() — cached at import so every store
+# MagicMock below returns the real set without depending on the actual module.
+_STORABLE = _real_storable_platforms()
+
 
 def _write_config(path: Path, data: dict) -> None:
     with path.open("w") as f:
@@ -30,9 +36,9 @@ def _minimal_config() -> dict:
     return {
         "mastodon_instance": "hachyderm.io",
         "mastodon_handle": "cate",
-        "bluesky_handle": "catehstn.bsky.social",
+        "bluesky_handle": "alice.bsky.social",
         "buttondown_api_key": "key",
-        "jetpack_site": "cate.blog",
+        "jetpack_site": "example.com",
         "jetpack_access_token": "token",
     }
 
@@ -155,6 +161,54 @@ class TestSaveRaw:
 
 
 # ---------------------------------------------------------------------------
+# save_platform_latest
+# ---------------------------------------------------------------------------
+
+class TestSavePlatformLatest:
+    def test_creates_directory_if_absent(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        assert not platform_dir.exists()
+        run.save_platform_latest({"buttondown": {"collected_at": "2026-05-29"}})
+        assert platform_dir.exists()
+
+    def test_writes_one_file_per_platform(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        run.save_platform_latest({
+            "buttondown": {"collected_at": "2026-05-29"},
+            "mastodon": {"posts": []},
+        })
+        assert (platform_dir / "buttondown-latest.json").exists()
+        assert (platform_dir / "mastodon-latest.json").exists()
+
+    def test_file_wrapped_in_platform_key(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        run.save_platform_latest({"buttondown": {"collected_at": "2026-05-29", "newsletters": []}})
+        data = json.loads((platform_dir / "buttondown-latest.json").read_text())
+        assert "buttondown" in data
+        assert data["buttondown"]["collected_at"] == "2026-05-29"
+
+    def test_overwrites_existing_file(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        platform_dir.mkdir(parents=True)
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        old = platform_dir / "buttondown-latest.json"
+        old.write_text(json.dumps({"buttondown": {"collected_at": "2026-04-24"}}))
+        run.save_platform_latest({"buttondown": {"collected_at": "2026-05-29"}})
+        data = json.loads(old.read_text())
+        assert data["buttondown"]["collected_at"] == "2026-05-29"
+
+    def test_empty_collected_writes_nothing(self, tmp_path, monkeypatch):
+        platform_dir = tmp_path / "data" / "platform"
+        monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
+        run.save_platform_latest({})
+        assert platform_dir.exists()
+        assert list(platform_dir.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
 # load_latest_raw
 # ---------------------------------------------------------------------------
 
@@ -258,12 +312,14 @@ def _setup_main(tmp_path, monkeypatch, argv: list[str]):
     """Patch paths and sys.argv; return a fake config file."""
     config_path = tmp_path / "config.yaml"
     data_dir = tmp_path / "data" / "weekly"
+    platform_dir = tmp_path / "data" / "platform"
     reports_dir = tmp_path / "reports"
     data_dir.mkdir(parents=True)
 
     _write_config(config_path, _minimal_config())
     monkeypatch.setattr(run, "CONFIG_PATH", config_path)
     monkeypatch.setattr(run, "DATA_DIR", data_dir)
+    monkeypatch.setattr(run, "PLATFORM_DIR", platform_dir)
     monkeypatch.setattr(run, "REPORTS_DIR", reports_dir)
     monkeypatch.setattr(sys, "argv", ["run.py"] + argv)
     return data_dir, reports_dir
@@ -285,7 +341,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=mock_save_prompt),
         }):
             run.main()
@@ -300,7 +356,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -317,7 +373,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=mock_save_prompt),
         }):
             run.main()
@@ -334,7 +390,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=MagicMock()),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=mock_save_prompt),
         }):
             run.main()
@@ -349,7 +405,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -365,7 +421,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -384,13 +440,75 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
 
         assert mock_collect.call_count == 1
         mock_store_update.assert_called_once_with({"mastodon": {"posts": []}})
+
+    def test_non_storable_platform_never_triggers_backfill(self, tmp_path, monkeypatch):
+        # Regression for #51: platforms without a store handler (calendly,
+        # oreilly, upcoming) were perpetually "new" and re-triggered a
+        # 3-month collect_all on every run.
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
+        collected = {
+            "mastodon": {"posts": []},
+            "calendly": {"events": []},
+            "upcoming": {"sources": {}},
+            "oreilly": {"payments": []},
+        }
+        mock_collect = MagicMock(return_value=collected)
+        mock_store_update = MagicMock()
+        # mastodon is known; the three non-storable platforms are not — but
+        # they must not count as "new" for backfill purposes.
+        mock_get_known = MagicMock(return_value={"mastodon"})
+
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()
+
+        assert mock_collect.call_count == 1, "backfill fired for non-storable platforms"
+        mock_store_update.assert_called_once_with(collected)
+
+    def test_mentions_never_triggers_backfill(self, tmp_path, monkeypatch):
+        # Regression for #51: mentions IS persisted, but its sheets are
+        # prefixed `hn_`, `mastodon_`, `bluesky_`, `gsc_` — never `mentions_` —
+        # so get_known_platforms() (prefix-based) can never detect it as known.
+        # Must be excluded to avoid a perpetual backfill on every run.
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
+        collected = {"mastodon": {"posts": []}, "mentions": {"sources": {}}}
+        mock_collect = MagicMock(return_value=collected)
+        mock_get_known = MagicMock(return_value={"mastodon"})
+
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()
+
+        assert mock_collect.call_count == 1, "backfill fired for mentions"
+
+    def test_backfill_logs_completion(self, tmp_path, monkeypatch, caplog):
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
+        mock_collect = MagicMock(return_value={"mastodon": {"posts": []}})
+        mock_get_known = MagicMock(return_value=set())  # forces backfill
+
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            with caplog.at_level("INFO"):
+                run.main()
+
+        assert any("backfilling 3 months" in r.message for r in caplog.records)
+        assert any("backfill complete" in r.message for r in caplog.records)
 
     def test_months_flag_sets_since(self, tmp_path, monkeypatch):
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--months", "3", "--collect-only"])
@@ -399,7 +517,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -425,7 +543,7 @@ class TestMain:
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
             "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known,
-                               STORE_PATH=tmp_path / "analytics.xlsx"),
+                               storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -442,7 +560,7 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "store": MagicMock(update=mock_store_update, get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             run.main()
@@ -600,3 +718,202 @@ class TestCheckDropStaleness:
         os.utime(export, (stale, stale))
         warnings = run.check_drop_staleness()
         assert any("my_export.csv" in w for w in warnings)
+
+    def test_linkedin_staleness_suppressed_when_api_token_set(self, tmp_path, monkeypatch):
+        """When linkedin_access_token is set, stale file-drop warning is suppressed."""
+        monkeypatch.chdir(tmp_path)
+        export = tmp_path / "linkedin_drops" / "export.csv"
+        self._write_csv(export)
+        stale = time.time() - 25 * 3600
+        import os
+        os.utime(export, (stale, stale))
+        config = {"linkedin_access_token": "some_token"}
+        warnings = run.check_drop_staleness(config)
+        assert not any("LinkedIn" in w for w in warnings)
+
+    def test_linkedin_staleness_shown_without_api_token(self, tmp_path, monkeypatch):
+        """Without linkedin_access_token, stale file-drop warning still appears."""
+        monkeypatch.chdir(tmp_path)
+        export = tmp_path / "linkedin_drops" / "export.csv"
+        self._write_csv(export)
+        stale = time.time() - 25 * 3600
+        import os
+        os.utime(export, (stale, stale))
+        warnings = run.check_drop_staleness({})
+        assert any("LinkedIn" in w for w in warnings)
+
+
+class TestNonInteractiveStaleness:
+    """Stale-check behaviour when stdin is not a TTY (e.g. agent runs)."""
+
+    def _write_stale_linkedin(self, tmp_path: Path, monkeypatch) -> None:
+        import os
+        drop = tmp_path / "linkedin_drops" / "export.csv"
+        drop.parent.mkdir(parents=True, exist_ok=True)
+        drop.write_text("col\nval\n")
+        os.utime(drop, (time.time() - 25 * 3600,) * 2)
+        monkeypatch.chdir(tmp_path)
+
+    def test_non_interactive_continues_despite_stale(self, tmp_path, monkeypatch):
+        """When stdin is not a TTY, stale warning is logged but run continues."""
+        self._write_stale_linkedin(tmp_path, monkeypatch)
+        config_path = tmp_path / "config.yaml"
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        _write_config(config_path, _minimal_config())
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        monkeypatch.setattr(run, "REPORTS_DIR", tmp_path / "reports")
+        monkeypatch.setattr(sys, "argv", ["run.py", "--collect-only"])
+        # stdin.isatty() returns False in pytest — no prompt, no exit
+        mock_collect = MagicMock(return_value={})
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()),
+                               storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()  # must not sys.exit()
+        mock_collect.assert_called_once()
+
+    def _setup_interactive(self, tmp_path: Path, monkeypatch) -> None:
+        self._write_stale_linkedin(tmp_path, monkeypatch)
+        config_path = tmp_path / "config.yaml"
+        data_dir = tmp_path / "data" / "weekly"
+        data_dir.mkdir(parents=True)
+        _write_config(config_path, _minimal_config())
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(run, "DATA_DIR", data_dir)
+        monkeypatch.setattr(run, "REPORTS_DIR", tmp_path / "reports")
+        monkeypatch.setattr(sys, "argv", ["run.py", "--collect-only"])
+        fake_stdin = MagicMock()
+        fake_stdin.isatty.return_value = True
+        monkeypatch.setattr(sys, "stdin", fake_stdin)
+
+    def test_interactive_stale_aborts_on_no(self, tmp_path, monkeypatch):
+        """When stdin is a TTY and user answers N, run aborts."""
+        self._setup_interactive(tmp_path, monkeypatch)
+        with patch("builtins.input", return_value="n"):
+            with pytest.raises(SystemExit) as exc:
+                run.main()
+        assert exc.value.code == 0
+
+    def test_interactive_stale_continues_on_yes(self, tmp_path, monkeypatch):
+        """When stdin is a TTY and user answers y, run continues."""
+        self._setup_interactive(tmp_path, monkeypatch)
+        mock_collect = MagicMock(return_value={})
+        with patch("builtins.input", return_value="y"):
+            with patch.dict("sys.modules", {
+                "collect": MagicMock(collect_all=mock_collect),
+                "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()),
+                                   storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+                "analyse": MagicMock(save_prompt=MagicMock()),
+            }):
+                run.main()
+        mock_collect.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# --auth linkedin
+# ---------------------------------------------------------------------------
+
+class TestAuthSubcommand:
+    def _setup(self, tmp_path: Path, monkeypatch, extra_config: dict | None = None) -> Path:
+        config_path = tmp_path / "config.yaml"
+        cfg = {
+            "mastodon_instance": "hachyderm.io",
+            "mastodon_handle": "cate",
+            "bluesky_handle": "alice.bsky.social",
+            "buttondown_api_key": "key",
+            "jetpack_site": "example.com",
+            "jetpack_access_token": "token",
+            "linkedin_client_id": "client123",
+            "linkedin_client_secret": "secret456",
+            **(extra_config or {}),
+        }
+        _write_config(config_path, cfg)
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        return config_path
+
+    def test_auth_linkedin_mutually_exclusive_with_collect_only(self, monkeypatch):
+        """--auth and --collect-only cannot be combined."""
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin", "--collect-only"])
+        with pytest.raises(SystemExit) as exc:
+            run.parse_args()
+        assert exc.value.code != 0
+
+    def test_auth_linkedin_mutually_exclusive_with_analyse_only(self, monkeypatch):
+        """--auth and --analyse-only cannot be combined."""
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin", "--analyse-only"])
+        with pytest.raises(SystemExit) as exc:
+            run.parse_args()
+        assert exc.value.code != 0
+
+    def test_missing_client_id_exits(self, tmp_path, monkeypatch):
+        """Missing linkedin_client_id exits with error."""
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, {
+            **_minimal_config(),
+            "linkedin_client_secret": "secret",
+        })
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+        with pytest.raises(SystemExit) as exc:
+            run.main()
+        assert exc.value.code == 1
+
+    def test_missing_client_secret_exits(self, tmp_path, monkeypatch):
+        """Missing linkedin_client_secret exits with error."""
+        config_path = tmp_path / "config.yaml"
+        _write_config(config_path, {
+            **_minimal_config(),
+            "linkedin_client_id": "client123",
+        })
+        monkeypatch.setattr(run, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+        with pytest.raises(SystemExit) as exc:
+            run.main()
+        assert exc.value.code == 1
+
+    def test_successful_oauth_writes_token_to_config(self, tmp_path, monkeypatch):
+        """Successful OAuth flow writes linkedin_access_token to config.yaml."""
+        config_path = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+
+        import threading
+
+        def fake_oauth(config: dict) -> None:
+            # Simulate a successful OAuth by writing the token directly
+            raw = config_path.read_text()
+            config_path.write_text(raw + "\nlinkedin_access_token: new_token_xyz\n")
+
+        monkeypatch.setattr(run, "_linkedin_oauth", fake_oauth)
+        run.main()
+
+        written = config_path.read_text()
+        assert "linkedin_access_token" in written
+        assert "new_token_xyz" in written
+
+    def test_token_exchange_failure_exits(self, tmp_path, monkeypatch):
+        """If the OAuth helper raises SystemExit(1), main propagates it."""
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["run.py", "--auth", "linkedin"])
+
+        def failing_oauth(config: dict) -> None:
+            sys.exit(1)
+
+        monkeypatch.setattr(run, "_linkedin_oauth", failing_oauth)
+        with pytest.raises(SystemExit) as exc:
+            run.main()
+        assert exc.value.code == 1
+
+    def test_platform_expected_with_api_token(self, tmp_path, monkeypatch):
+        """_platform_expected returns True for linkedin when api token is set."""
+        monkeypatch.chdir(tmp_path)
+        config = {"linkedin_access_token": "tok"}
+        assert run._platform_expected("linkedin", config) is True
+
+    def test_platform_expected_without_token_and_no_files(self, tmp_path, monkeypatch):
+        """_platform_expected returns False when no token and no drop files."""
+        monkeypatch.chdir(tmp_path)
+        assert run._platform_expected("linkedin", {}) is False

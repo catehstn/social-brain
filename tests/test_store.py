@@ -10,14 +10,16 @@ from store import (
     _load,
     _upsert,
     get_known_platforms,
+    storable_platforms,
     update,
     _process_mastodon,
     _process_bluesky,
     _process_jetpack,
     _process_linkedin,
     _process_buttondown,
-    _process_vercel,
+    _process_posthog,
     _process_amazon,
+    _process_goatcounter,
     _process_mentions,
 )
 
@@ -141,6 +143,26 @@ class TestGetKnownPlatforms:
 
 
 # ---------------------------------------------------------------------------
+# storable_platforms
+# ---------------------------------------------------------------------------
+
+class TestStorablePlatforms:
+    def test_matches_registered_processors(self):
+        # Every entry must correspond to a real _process_* handler so callers
+        # can trust the set for backfill/detection logic (see #51).
+        expected = {
+            "mastodon", "bluesky", "jetpack", "linkedin", "buttondown",
+            "posthog", "amazon", "goatcounter", "mentions", "stripe",
+        }
+        assert storable_platforms() == expected
+
+    def test_excludes_platforms_without_handler(self):
+        # These are collected but not persisted — must NOT be reported as storable.
+        for name in ("calendly", "oreilly", "upcoming"):
+            assert name not in storable_platforms()
+
+
+# ---------------------------------------------------------------------------
 # _process_mastodon
 # ---------------------------------------------------------------------------
 
@@ -234,7 +256,7 @@ class TestProcessMastodon:
 class TestProcessBluesky:
     def _collected(self, **overrides):
         base = {
-            "handle": "catehstn.bsky.social",
+            "handle": "alice.bsky.social",
             "posts": [
                 {"uri": "at://did:plc:abc/app.bsky.feed.post/1", "created_at": "2026-03-01T10:00:00Z",
                  "text": "Hello Bluesky", "likes": 10, "reposts": 3, "replies": 2, "has_attachment": False},
@@ -297,7 +319,7 @@ class TestProcessJetpack:
                 {"date": "2026-03-02", "views": 120},
             ],
             "top_posts": [
-                {"href": "https://cate.blog/post-a", "title": "Post A", "views": 80},
+                {"href": "https://example.com/post-a", "title": "Post A", "views": 80},
             ],
             "referrers": [
                 {"name": "twitter.com", "views": 30},
@@ -455,10 +477,12 @@ class TestProcessButtondown:
 
 
 # ---------------------------------------------------------------------------
-# _process_vercel
+# _process_posthog — writes to web_analytics_daily with a (date, source)
+# composite key so pre-existing rows with a different `source` aren't
+# clobbered by a new posthog write.
 # ---------------------------------------------------------------------------
 
-class TestProcessVercel:
+class TestProcessPosthog:
     def _collected(self):
         return {
             "daily": [
@@ -467,31 +491,53 @@ class TestProcessVercel:
             ],
         }
 
-    def test_writes_daily_sheet(self, tmp_path):
+    def test_writes_web_analytics_sheet(self, tmp_path):
         sheets = {}
-        _process_vercel(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
-        assert "vercel_daily" in sheets
-        assert len(sheets["vercel_daily"]) == 2
+        _process_posthog(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "web_analytics_daily" in sheets
+        assert len(sheets["web_analytics_daily"]) == 2
+        assert set(sheets["web_analytics_daily"]["source"]) == {"posthog"}
 
-    def test_upserts_by_date(self, tmp_path):
+    def test_upserts_by_date_and_source(self, tmp_path):
         path = tmp_path / "s.xlsx"
         first = {"daily": [{"date": "2026-03-01", "page_views": 100, "visitors": 80}]}
         second = {"daily": [{"date": "2026-03-01", "page_views": 200, "visitors": 160}]}
         for collected in [first, second]:
             sheets = {}
-            _process_vercel(collected, sheets, path, NOW)
+            _process_posthog(collected, sheets, path, NOW)
             with pd.ExcelWriter(path, engine="openpyxl") as w:
                 for name, df in sheets.items():
                     df.to_excel(w, sheet_name=name, index=False)
-        result = _load(path, "vercel_daily")
+        result = _load(path, "web_analytics_daily")
         assert len(result) == 1
         assert int(result.iloc[0]["page_views"]) == 200
+        assert result.iloc[0]["source"] == "posthog"
+
+    def test_preserves_rows_with_different_source(self, tmp_path):
+        """A row already in the sheet with a different `source` must survive
+        a new posthog write — the (date, source) key prevents overwrite."""
+        path = tmp_path / "s.xlsx"
+        seed = pd.DataFrame([
+            {"date": "2026-03-01", "source": "legacy", "page_views": 999, "visitors": 500},
+        ])
+        with pd.ExcelWriter(path, engine="openpyxl") as w:
+            seed.to_excel(w, sheet_name="web_analytics_daily", index=False)
+        sheets = {}
+        _process_posthog(
+            {"daily": [{"date": "2026-03-01", "page_views": 100, "visitors": 80}]},
+            sheets, path, NOW,
+        )
+        rows = sheets["web_analytics_daily"]
+        assert len(rows) == 2
+        by_source = {r["source"]: r for _, r in rows.iterrows()}
+        assert int(by_source["legacy"]["page_views"]) == 999
+        assert int(by_source["posthog"]["page_views"]) == 100
 
     def test_entry_without_date_skipped(self, tmp_path):
         collected = {"daily": [{"page_views": 100, "visitors": 80}]}
         sheets = {}
-        _process_vercel(collected, sheets, tmp_path / "s.xlsx", NOW)
-        assert "vercel_daily" not in sheets or sheets["vercel_daily"].empty
+        _process_posthog(collected, sheets, tmp_path / "s.xlsx", NOW)
+        assert "web_analytics_daily" not in sheets or sheets["web_analytics_daily"].empty
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +590,136 @@ class TestProcessAmazon:
 
 
 # ---------------------------------------------------------------------------
+# _process_goatcounter
+# ---------------------------------------------------------------------------
+
+class TestProcessGoatcounter:
+    def _collected(self, **overrides):
+        base = {
+            "platform": "goatcounter",
+            "collected_at": "2026-08-14T11:19:36Z",
+            "period_start": "2026-07-31",
+            "period_end": "2026-08-14",
+            "total_visitors": 19,
+            "total_events": 12,
+            "top_paths": [
+                {"path": "/", "count": 7},
+                {"path": "/about", "count": 3},
+            ],
+            "events": [
+                {"event": "result/conrad", "count": 2},
+                {"event": "result/stuck", "count": 2},
+            ],
+        }
+        base.update(overrides)
+        return base
+
+    def test_writes_period_row(self, tmp_path):
+        sheets = {}
+        _process_goatcounter(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "goatcounter_periods" in sheets
+        row = sheets["goatcounter_periods"].iloc[0]
+        assert row["period_start"] == "2026-07-31"
+        assert row["period_end"] == "2026-08-14"
+        assert int(row["period_days"]) == 14
+        assert int(row["total_visitors"]) == 19
+        assert int(row["total_events"]) == 12
+
+    def test_writes_paths_and_events(self, tmp_path):
+        sheets = {}
+        _process_goatcounter(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert list(sheets["goatcounter_paths"]["path"]) == ["/", "/about"]
+        assert list(sheets["goatcounter_events"]["event"]) == ["result/conrad", "result/stuck"]
+        # period_start must ride along on every row so different windows
+        # don't collide via the (period_end, path/event) key.
+        assert set(sheets["goatcounter_paths"]["period_start"]) == {"2026-07-31"}
+        assert set(sheets["goatcounter_events"]["period_start"]) == {"2026-07-31"}
+
+    def test_two_periods_accrete(self, tmp_path):
+        # Successive collections with different period_end must produce a trend
+        # rather than overwriting one row.
+        path = tmp_path / "s.xlsx"
+        for period_start, period_end, visitors in [
+            ("2026-07-31", "2026-08-14", 19),
+            ("2026-08-07", "2026-08-21", 12),
+        ]:
+            sheets = {}
+            _process_goatcounter(
+                self._collected(period_start=period_start, period_end=period_end, total_visitors=visitors),
+                sheets, path, NOW,
+            )
+            with pd.ExcelWriter(path, engine="openpyxl") as w:
+                for name, df in sheets.items():
+                    df.to_excel(w, sheet_name=name, index=False)
+        result = _load(path, "goatcounter_periods")
+        assert len(result) == 2
+        assert set(result["period_end"]) == {"2026-08-14", "2026-08-21"}
+
+    def test_same_period_upserts_in_place(self, tmp_path):
+        # A re-run of the same window must overwrite, not duplicate.
+        path = tmp_path / "s.xlsx"
+        for visitors in [5, 19]:
+            sheets = {}
+            _process_goatcounter(
+                self._collected(total_visitors=visitors),
+                sheets, path, NOW,
+            )
+            with pd.ExcelWriter(path, engine="openpyxl") as w:
+                for name, df in sheets.items():
+                    df.to_excel(w, sheet_name=name, index=False)
+        result = _load(path, "goatcounter_periods")
+        assert len(result) == 1
+        assert int(result.iloc[0]["total_visitors"]) == 19
+
+    def test_different_window_sizes_dont_overwrite(self, tmp_path):
+        # Regression: a default 2-week run must NOT overwrite an earlier
+        # same-day --months 3 run. Both are legitimate history.
+        path = tmp_path / "s.xlsx"
+        for period_start, visitors in [
+            ("2026-05-14", 200),   # --months 3 window (90 days)
+            ("2026-07-31", 19),    # default 2-week window (same period_end)
+        ]:
+            sheets = {}
+            _process_goatcounter(
+                self._collected(period_start=period_start, total_visitors=visitors),
+                sheets, path, NOW,
+            )
+            with pd.ExcelWriter(path, engine="openpyxl") as w:
+                for name, df in sheets.items():
+                    df.to_excel(w, sheet_name=name, index=False)
+        result = _load(path, "goatcounter_periods")
+        assert len(result) == 2
+        by_start = {r["period_start"]: r for _, r in result.iterrows()}
+        assert int(by_start["2026-05-14"]["total_visitors"]) == 200
+        assert int(by_start["2026-07-31"]["total_visitors"]) == 19
+
+    def test_no_period_end_writes_nothing(self, tmp_path):
+        # Defensive: collector returning malformed data must not write empty
+        # rows to the store.
+        sheets = {}
+        _process_goatcounter({"total_visitors": 5}, sheets, tmp_path / "s.xlsx", NOW)
+        assert sheets == {}
+
+    def test_no_period_start_writes_nothing(self, tmp_path):
+        sheets = {}
+        _process_goatcounter(
+            {"period_end": "2026-08-14", "total_visitors": 5},
+            sheets, tmp_path / "s.xlsx", NOW,
+        )
+        assert sheets == {}
+
+    def test_empty_paths_and_events_skip_those_sheets(self, tmp_path):
+        sheets = {}
+        _process_goatcounter(
+            self._collected(top_paths=[], events=[]),
+            sheets, tmp_path / "s.xlsx", NOW,
+        )
+        assert "goatcounter_periods" in sheets
+        assert "goatcounter_paths" not in sheets
+        assert "goatcounter_events" not in sheets
+
+
+# ---------------------------------------------------------------------------
 # _process_mentions
 # ---------------------------------------------------------------------------
 
@@ -553,8 +729,8 @@ class TestProcessMentions:
             "sources": {
                 "hacker_news": [
                     {"objectID": "hn1", "type": "story", "title": "Cool post",
-                     "url": "https://cate.blog/post", "points": 42, "num_comments": 5,
-                     "created_at": "2026-03-01T10:00:00Z", "domain": "cate.blog"},
+                     "url": "https://example.com/post", "points": 42, "num_comments": 5,
+                     "created_at": "2026-03-01T10:00:00Z", "domain": "example.com"},
                 ],
                 "mastodon": [
                     {"id": "m1", "account": {"acct": "friend@mastodon.social"},
@@ -566,9 +742,9 @@ class TestProcessMentions:
                      "record": {"text": "Nice work!"}, "indexedAt": "2026-03-01T12:00:00Z"},
                 ],
                 "google_search_console": [
-                    {"site": "cate.blog", "query": "engineering management", "page": "https://cate.blog/post",
+                    {"site": "example.com", "query": "engineering management", "page": "https://example.com/post",
                      "clicks": 10, "impressions": 200, "ctr": 0.05, "position": 8.2},
-                    {"site": "whatsmyjob.club", "query": "job titles", "page": "https://whatsmyjob.club/",
+                    {"site": "example.org", "query": "job titles", "page": "https://example.org/",
                      "clicks": 5, "impressions": 100, "ctr": 0.05, "position": 12.0},
                 ],
             }
@@ -605,17 +781,17 @@ class TestProcessMentions:
         sheets = {}
         _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
         sites = set(sheets["gsc_queries"]["site"].tolist())
-        assert "cate.blog" in sites
-        assert "whatsmyjob.club" in sites
+        assert "example.com" in sites
+        assert "example.org" in sites
 
     def test_gsc_upsert_by_site_query_page(self, tmp_path):
         path = tmp_path / "s.xlsx"
         first = {"sources": {"google_search_console": [
-            {"site": "cate.blog", "query": "mgmt", "page": "https://cate.blog/p",
+            {"site": "example.com", "query": "mgmt", "page": "https://example.com/p",
              "clicks": 5, "impressions": 100, "ctr": 0.05, "position": 10.0},
         ]}}
         second = {"sources": {"google_search_console": [
-            {"site": "cate.blog", "query": "mgmt", "page": "https://cate.blog/p",
+            {"site": "example.com", "query": "mgmt", "page": "https://example.com/p",
              "clicks": 8, "impressions": 120, "ctr": 0.067, "position": 9.5},
         ]}}
         for collected in [first, second]:
@@ -732,3 +908,114 @@ class TestUpdate:
         result = _load(path, "account_snapshots")
         assert len(result) == 1
         assert result.iloc[0]["platform"] == "mastodon"
+
+
+# ---------------------------------------------------------------------------
+# _process_mentions — flat schema (matches what collectors/mentions.py returns)
+# ---------------------------------------------------------------------------
+
+class TestProcessMentions:
+    def _collected(self):
+        return {
+            "sources": {
+                "hacker_news": [
+                    {
+                        "type": "story",
+                        "domain": "example.com",
+                        "title": "How to X",
+                        "url": "https://example.com/how-to-x",
+                        "hn_url": "https://news.ycombinator.com/item?id=1",
+                        "points": 42,
+                        "num_comments": 7,
+                        "created_at": "2026-03-01",
+                    },
+                ],
+                "mastodon": [
+                    {
+                        "created_at": "2026-03-02",
+                        "from": "alice@fosstodon.org",
+                        "content": "nice post!",
+                        "url": "https://fosstodon.org/@alice/12345",
+                    },
+                ],
+                "bluesky": [
+                    {
+                        "created_at": "2026-03-03",
+                        "from": "bob.bsky.social",
+                        "content": "great read",
+                        "url": "https://bsky.app/profile/bob.bsky.social/post/abc",
+                    },
+                ],
+                "google_search_console": [
+                    {
+                        "domain": "example.com",
+                        "query": "raccoon",
+                        "page": "https://example.com/raccoon",
+                        "clicks": 5,
+                        "impressions": 100,
+                        "ctr": 5.0,
+                        "position": 3.1,
+                    },
+                ],
+            }
+        }
+
+    def test_writes_hn_mentions(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "hn_mentions" in sheets
+        row = sheets["hn_mentions"].iloc[0]
+        assert row["hn_url"].startswith("https://news.ycombinator.com/")
+        assert row["domain"] == "example.com"
+        assert row["points"] == 42
+
+    def test_writes_mastodon_mentions(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "mastodon_mentions" in sheets
+        row = sheets["mastodon_mentions"].iloc[0]
+        assert row["from"] == "alice@fosstodon.org"
+        assert row["content"] == "nice post!"
+
+    def test_writes_bluesky_mentions(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "bluesky_mentions" in sheets
+        row = sheets["bluesky_mentions"].iloc[0]
+        assert row["from"] == "bob.bsky.social"
+
+    def test_writes_gsc_queries(self, tmp_path):
+        sheets = {}
+        _process_mentions(self._collected(), sheets, tmp_path / "s.xlsx", NOW)
+        assert "gsc_queries" in sheets
+        row = sheets["gsc_queries"].iloc[0]
+        assert row["domain"] == "example.com"
+        assert row["query"] == "raccoon"
+
+    def test_upserts_by_url_dedupes_across_runs(self, tmp_path):
+        """Same mention URL from two runs should upsert to a single row."""
+        path = tmp_path / "s.xlsx"
+        collected = self._collected()
+
+        # First run: write the sheet so it exists on disk
+        sheets1 = {}
+        _process_mentions(collected, sheets1, path, NOW)
+        with pd.ExcelWriter(path, engine="openpyxl") as w:
+            sheets1["mastodon_mentions"].to_excel(w, sheet_name="mastodon_mentions", index=False)
+
+        # Second run with the same data: existing row should be replaced, not appended
+        sheets2 = {}
+        _process_mentions(collected, sheets2, path, NOW)
+        assert len(sheets2["mastodon_mentions"]) == 1
+
+    def test_empty_sources_writes_nothing(self, tmp_path):
+        sheets = {}
+        _process_mentions({"sources": {"hacker_news": [], "mastodon": [], "bluesky": []}}, sheets, tmp_path / "s.xlsx", NOW)
+        assert sheets == {}
+
+    def test_missing_url_dropped(self, tmp_path):
+        """A mention with no url can't be upserted, so it's dropped."""
+        sheets = {}
+        collected = {"sources": {"mastodon": [{"from": "x", "content": "y", "created_at": "2026-01"}]}}
+        _process_mentions(collected, sheets, tmp_path / "s.xlsx", NOW)
+        assert "mastodon_mentions" not in sheets

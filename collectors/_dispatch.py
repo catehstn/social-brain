@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from collectors.mastodon import collect_mastodon
@@ -9,16 +9,76 @@ from collectors.bluesky import collect_bluesky
 from collectors.buttondown import collect_buttondown
 from collectors.jetpack import collect_jetpack
 from collectors.linkedin import collect_linkedin
+from collectors.linkedin_api import collect_linkedin_api
 from collectors.substack import collect_substack
-from collectors.vercel import collect_vercel
+from collectors.posthog import collect_posthog
 from collectors.amazon import collect_amazon
 from collectors.upcoming import collect_upcoming
 from collectors.mentions import collect_mentions
 from collectors.goatcounter import collect_goatcounter
 from collectors.oreilly import collect_oreilly
 from collectors.calendly import collect_calendly
+from collectors.stripe import collect_stripe
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_stripe_tokens(config: dict) -> dict[str, str]:
+    """
+    Extract Stripe tokens from config. Supports two shapes:
+
+    1. `stripe_tokens: {label: key, ...}` — dict of user-labelled accounts.
+    2. Flat keys `stripe_token_<label>: key` — any config key matching this
+       prefix is treated as one Stripe account (label is the suffix).
+
+    Empty tokens are dropped. Returns {} if no tokens configured.
+    """
+    tokens: dict[str, str] = {}
+    dict_form = config.get("stripe_tokens") or {}
+    if isinstance(dict_form, dict):
+        for label, key in dict_form.items():
+            if key:
+                tokens[str(label)] = str(key)
+    for k, v in config.items():
+        if not isinstance(k, str) or not k.startswith("stripe_token_"):
+            continue
+        label = k[len("stripe_token_"):]
+        if label and v:
+            tokens[label] = str(v)
+    return tokens
+
+
+_STRIPE_SINCE_MAX_DAYS = 3650  # 10 years — generous ceiling, guards against OverflowError
+
+
+def _stripe_since(config: dict, since: datetime | None) -> datetime | None:
+    """
+    Resolve the Stripe lookback window.
+
+    An explicit global `since` (e.g. from ``--months``) always wins. Otherwise
+    use ``stripe_since_days`` from config (default 60) so month-to-date and
+    recent activity are covered — the collector's own 14-day default is too
+    short for monthly rollups, and Stripe history is cheap to over-fetch.
+
+    - A non-positive ``stripe_since_days`` (0, negative) falls back to the
+      collector's internal default (returns None).
+    - Malformed values (None, non-numeric strings) also fall back to the
+      60-day default.
+    - Very large values are clamped to a 10-year ceiling so a runaway config
+      value can't raise ``OverflowError`` inside ``timedelta``.
+    """
+    if since is not None:
+        return since
+    days = config.get("stripe_since_days", 60)
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 60
+    if days <= 0:
+        return None
+    days = min(days, _STRIPE_SINCE_MAX_DAYS)
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
 
 PLATFORM_COLLECTORS = {
     "mastodon": "collect_mastodon",
@@ -27,13 +87,14 @@ PLATFORM_COLLECTORS = {
     "jetpack": "collect_jetpack",
     "linkedin": "collect_linkedin",
     "substack": "collect_substack",
-    "vercel": "collect_vercel",
+    "posthog": "collect_posthog",
     "amazon": "collect_amazon",
     "upcoming": "collect_upcoming",
     "mentions": "collect_mentions",
     "goatcounter": "collect_goatcounter",
     "oreilly": "collect_oreilly",
     "calendly": "collect_calendly",
+    "stripe": "collect_stripe",
 }
 
 
@@ -91,7 +152,11 @@ def collect_all(
                 username=config.get("jetpack_username", ""),
             )
         elif name == "linkedin":
-            data = collect_linkedin()
+            li_token = config.get("linkedin_access_token", "")
+            if li_token:
+                data = collect_linkedin_api(li_token, since=since)
+            else:
+                data = collect_linkedin()
         elif name == "substack":
             data = collect_substack()
         elif name == "amazon":
@@ -103,17 +168,18 @@ def collect_all(
                 asins,
                 marketplaces=config.get("amazon_marketplaces") or ["amazon.com", "amazon.co.uk"],
             )
-        elif name == "vercel":
-            vercel_token = config.get("vercel_token", "")
-            vercel_project_id = config.get("vercel_project_id", "")
-            if not vercel_token or not vercel_project_id:
-                logger.info("Vercel: vercel_token or vercel_project_id not configured — skipping")
+        elif name == "posthog":
+            posthog_api_key = config.get("posthog_api_key", "")
+            posthog_project_id = config.get("posthog_project_id", "")
+            if not posthog_api_key or not posthog_project_id:
+                logger.info("PostHog: posthog_api_key or posthog_project_id not configured — skipping")
                 return
-            data = collect_vercel(
-                vercel_token,
-                vercel_project_id,
-                team_id=config.get("vercel_team_id") or None,
+            data = collect_posthog(
+                posthog_api_key,
+                str(posthog_project_id),
+                host=config.get("posthog_host") or None,
                 since=since,
+                host_filter=config.get("posthog_host_filter") or None,
             )
         elif name == "upcoming":
             jetpack_site = config.get("jetpack_site", "")
@@ -158,6 +224,12 @@ def collect_all(
                 logger.info("Calendly: calendly_token not configured — skipping")
                 return
             data = collect_calendly(calendly_token, since=since, lead_gen_event=config.get("calendly_lead_gen_event") or None)
+        elif name == "stripe":
+            tokens = _resolve_stripe_tokens(config)
+            if not tokens:
+                logger.info("Stripe: no tokens configured — skipping")
+                return
+            data = collect_stripe(tokens, since=_stripe_since(config, since))
         else:
             logger.error("Unknown platform: %s", name)
             return

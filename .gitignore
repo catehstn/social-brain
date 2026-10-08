@@ -12,6 +12,9 @@ config.yaml
 # To share a specific snapshot, use: git add -f data/weekly/2025-W22.json
 data/weekly/*.json
 
+# Per-platform latest snapshots — updated on each collection run.
+data/platform/*.json
+
 # Persistent analytics store — contains your full history, gitignored.
 data/analytics.xlsx
 

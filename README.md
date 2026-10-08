@@ -89,7 +89,7 @@ Collects: all queued posts across connected channels — shown to Claude as upco
        async src="//gc.zgo.at/count.js"></script>
    ```
 3. Settings → API → Create token (read access)
-4. Set `goatcounter_site` (just the subdomain, e.g. `what-raccoon`) and `goatcounter_token` in `config.yaml`
+4. Set `goatcounter_site` (just the subdomain, e.g. `mysite` if your dashboard is at `https://mysite.goatcounter.com`) and `goatcounter_token` in `config.yaml`
 
 To track custom events (e.g. quiz results), call `window.goatcounter.count()` with `event: true` in your JS.
 
@@ -103,12 +103,15 @@ Collects: total pageviews, unique visitors, and per-path breakdown (including cu
 
 Collects: booking counts grouped by event type with active vs. cancelled split, plus `lead_gen_bookings` if configured.
 
-**Vercel Web Analytics**
+**PostHog Web Analytics**
 
-Your project must have Web Analytics enabled. You need at least Member access on the team.
+Requires the PostHog JS snippet installed on the site you want to measure — see [posthog.com/docs/getting-started/install](https://posthog.com/docs/getting-started/install).
 
-1. [vercel.com/account/tokens](https://vercel.com/account/tokens) → Create token (Full Account scope)
-2. Set `vercel_token`, `vercel_project_id` (project slug from the URL), and `vercel_team_id` (from Team Settings → General, if applicable)
+1. PostHog dashboard → Settings → **Personal API Keys** → Create key with the `query:read` scope
+2. Settings → **Project** → copy the numeric Project ID
+3. Set `posthog_api_key`, `posthog_project_id`, and `posthog_host` (`https://us.i.posthog.com` for US cloud, `https://eu.i.posthog.com` for EU) in `config.yaml`
+
+Collects: total page views + unique visitors for the window, per-day rollup, top 50 pages (path / views / visitors), and top 20 referrers (excludes `$direct`). Data lands in the `web_analytics_daily` sheet in the persistent store.
 
 ---
 
@@ -116,7 +119,28 @@ Your project must have Web Analytics enabled. You need at least Member access on
 
 **LinkedIn**
 
-LinkedIn doesn't offer an analytics API for individual creators.
+Two options — use whichever suits you:
+
+**Option A: API (EU/EEA/Switzerland only) — recommended**
+
+Uses LinkedIn's Member Data Portability API (`r_dma_portability_self_serve` scope). Fully automatic once set up; no manual CSV export needed.
+
+1. Create a LinkedIn Developer App at [linkedin.com/developers](https://www.linkedin.com/developers/)
+2. Add `http://localhost:8976/callback` as a redirect URL under **Auth → OAuth 2.0 settings**
+3. Apply for the **Member Data Portability** product (DMA access) — approval may take a few days
+4. Add your Client ID and Client Secret to `config.yaml`:
+   ```yaml
+   linkedin_client_id: YOUR_CLIENT_ID
+   linkedin_client_secret: YOUR_CLIENT_SECRET
+   ```
+5. Run the OAuth flow (opens your browser, saves token automatically):
+   ```bash
+   python run.py --auth linkedin
+   ```
+
+Tokens are valid for ~60 days. Re-run `--auth linkedin` when the token expires.
+
+**Option B: Manual CSV export (all regions)**
 
 1. LinkedIn profile → Analytics → Posts → Export → download CSV/XLSX
 2. Move the file into `linkedin_drops/`
@@ -175,6 +199,23 @@ Gives you the search queries that bring people to your site and which pages they
 4. Set `gsc_credentials_file: /path/to/service-account.json` in `config.yaml`
 5. Install extra dependencies: `pip install google-api-python-client google-auth`
 
+**Stripe** (sales — supports multiple accounts)
+1. In the Stripe dashboard → Developers → API keys → **Create restricted key**
+2. Give it **Read** on: Charges, Payment Intents, Checkout Sessions, Invoices, Customers, Balance transactions, Products
+3. Add to `config.yaml` — two shapes are supported:
+   ```yaml
+   # Preferred for many accounts:
+   stripe_tokens:
+     primary: rk_live_YOUR_KEY_HERE
+     secondary: rk_live_YOUR_OTHER_KEY_HERE
+
+   # Or flat keys — any config key starting with stripe_token_ becomes one account:
+   stripe_token_primary: rk_live_YOUR_KEY_HERE
+   ```
+4. Labels (`primary`, `secondary`, whatever you call them) are yours to choose — the collector groups everything by label.
+5. Checkout session metadata is preserved intact so you can classify sales by whatever product/cohort/tag scheme you use.
+6. `stripe_since_days` (default 60) sets how far back Stripe data is pulled when no `--months` lookback is given, so month-to-date and recent activity are covered. Set `0` to fall back to the collector's 14-day default.
+
 ---
 
 ### Optional add-ons (extend existing credentials)
@@ -209,6 +250,7 @@ python run.py --analyse-only --months 3  # same, with 3-month label in filename
 python run.py --platform mastodon  # single platform
 python run.py --update             # collect + build a compact update prompt
 python run.py --analyse-only --update  # update prompt from last saved data
+python run.py --auth linkedin      # (EU only) OAuth flow to get a LinkedIn API token
 ```
 
 ### First run

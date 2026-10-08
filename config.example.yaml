@@ -57,11 +57,19 @@ monitored_domains:
 # Personal access token from buffer.com/manage/apps-and-extras/apps
 buffer_token: YOUR_BUFFER_TOKEN
 
-# --- Vercel Web Analytics (optional) ---
-# Leave blank to skip Vercel collection.
-vercel_token: YOUR_VERCEL_TOKEN        # Vercel account token (Settings → Tokens)
-vercel_project_id: your-project-slug  # Project name/slug (shown in the URL, e.g. "my-app")
-vercel_team_id:                        # Team ID if the project is in a team (optional)
+# --- PostHog Web Analytics (optional) ---
+# Leave blank to skip PostHog collection.
+# Requires the PostHog snippet installed on the site you want to measure.
+# Create a Personal API Key at Settings → Personal API Keys with the "query:read"
+# scope; find the Project ID at Settings → Project.
+posthog_api_key:                              # phx_... personal API key
+posthog_project_id:                           # numeric project id
+posthog_host: https://us.i.posthog.com        # US cloud (default). Use https://eu.i.posthog.com for EU.
+# Restrict counts to production traffic. Any other $host values (preview
+# deploys, git-branch deploys, localhost) are excluded from the rollup.
+# Omit to count every $host in the project — the collector will log a
+# warning listing distinct hosts when contamination is likely.
+posthog_host_filter: www.your-site.com        # or ["www.a.com", "www.b.com"] for multi-site projects
 
 # --- GoatCounter (optional) ---
 # goatcounter_site: what-raccoon   # the subdomain part of yoursite.goatcounter.com
@@ -71,6 +79,40 @@ vercel_team_id:                        # Team ID if the project is in a team (op
 # Personal Access Token from calendly.com/integrations/api_webhooks
 # calendly_token: YOUR_CALENDLY_TOKEN
 # calendly_lead_gen_event: "30 Minute Coaching Intro"  # exact event name to surface as primary lead-gen metric
+
+# --- LinkedIn DMA API (EU/EEA/Switzerland only — optional, replaces manual CSV export) ---
+# Requires a LinkedIn Developer App with r_dma_portability_self_serve scope approved.
+# See README for full setup instructions.
+# After setup: python run.py --auth linkedin
+# linkedin_client_id: YOUR_LINKEDIN_CLIENT_ID
+# linkedin_client_secret: YOUR_LINKEDIN_CLIENT_SECRET
+# linkedin_access_token:   # written automatically by --auth linkedin (valid ~60 days)
+
+# --- Stripe (optional — sales) ---
+# Restricted keys, one per account. Any user-chosen labels work.
+# Recommended scopes: charges (Read), payment_intents (Read),
+# checkout_sessions (Read), invoices (Read), customers (Read),
+# balance_transactions (Read), products (Read).
+#
+# Two equivalent shapes are supported:
+#
+# 1. Dict form (preferred for many accounts):
+# stripe_tokens:
+#   primary: rk_live_YOUR_KEY_HERE
+#   secondary: rk_live_YOUR_OTHER_KEY_HERE
+#
+# 2. Flat form (any key matching stripe_token_<label>):
+# stripe_token_primary: rk_live_YOUR_KEY_HERE
+# stripe_token_secondary: rk_live_YOUR_OTHER_KEY_HERE
+#
+# The collector preserves checkout session metadata intact so downstream
+# analysis can classify sales by whatever product/cohort scheme you use.
+#
+# stripe_since_days: how far back to pull Stripe data when no global --months
+# lookback is given. Default 60, so month-to-date and recent activity are
+# covered (the collector's own fallback is only 14 days). Set 0 to use that
+# 14-day fallback instead.
+# stripe_since_days: 60
 
 # --- Content strategy ---
 # primary_focus: the metric or outcome you care about most. Claude uses this to frame
