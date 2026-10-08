@@ -121,16 +121,16 @@ def _process_mastodon(collected: dict, sheets: dict, store_path: Path, now: str)
 
     acct = collected.get("account", {})
     if acct:
-        df_new = pd.DataFrame([{
-            "date": now[:10],
-            "platform": "mastodon",
-            "metric": "followers",
-            "value": acct.get("followers", 0),
-        }])
-        sheets["account_snapshots"] = _upsert(
-            sheets.get("account_snapshots", _load(store_path, "account_snapshots")),
-            df_new, ["date", "platform", "metric"],
-        )
+        # Use plain `.get` (None default): a missing key means the collector
+        # didn't fetch that metric this run and must not write a 0 — the
+        # Mastodon collector sets all three when it succeeds, but a payload
+        # from before the three-metric upgrade would otherwise regress 0s
+        # into the timeseries.
+        _snapshot_account(sheets, store_path, now, platform="mastodon", metrics={
+            "followers": acct.get("followers"),
+            "following": acct.get("following"),
+            "statuses_count": acct.get("statuses_count"),
+        })
 
     for f in collected.get("new_follows", []):
         rows = [{
@@ -147,7 +147,45 @@ def _process_mastodon(collected: dict, sheets: dict, store_path: Path, now: str)
         )
 
 
+def _snapshot_account(
+    sheets: dict,
+    store_path: Path,
+    now: str,
+    *,
+    platform: str,
+    metrics: dict[str, Any],
+) -> None:
+    """Append one `account_snapshots` row per (platform, metric), de-duped on
+    (date, platform, metric) so same-day re-runs overwrite rather than stack
+    (#42).
+
+    Metrics whose value is None are skipped — a key the collector couldn't
+    fetch (e.g. the Bluesky getProfile call failed) must not pollute the
+    timeseries with a 0.
+    """
+    rows = [
+        {"date": now[:10], "platform": platform, "metric": metric, "value": value}
+        for metric, value in metrics.items()
+        if value is not None
+    ]
+    if not rows:
+        return
+    df_new = pd.DataFrame(rows)
+    sheets["account_snapshots"] = _upsert(
+        sheets.get("account_snapshots", _load(store_path, "account_snapshots")),
+        df_new, ["date", "platform", "metric"],
+    )
+
+
 def _process_bluesky(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    acct = collected.get("account", {})
+    if acct:
+        _snapshot_account(sheets, store_path, now, platform="bluesky", metrics={
+            "followers": acct.get("followers"),
+            "follows": acct.get("follows"),
+            "posts_count": acct.get("posts_count"),
+        })
+
     posts = collected.get("posts", [])
     if posts:
         rows = [{
@@ -207,6 +245,12 @@ def _process_jetpack(collected: dict, sheets: dict, store_path: Path, now: str) 
 
 
 def _process_linkedin(collected: dict, sheets: dict, store_path: Path, now: str) -> None:
+    total_followers = collected.get("followers", {}).get("total_followers")
+    if total_followers is not None:
+        _snapshot_account(sheets, store_path, now, platform="linkedin", metrics={
+            "followers": total_followers,
+        })
+
     daily = collected.get("daily_engagement", [])
     if daily:
         df_new = pd.DataFrame([{

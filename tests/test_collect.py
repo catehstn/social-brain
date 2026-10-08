@@ -192,6 +192,9 @@ class TestCollectBluesky:
         respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
             return_value=httpx.Response(200, json={"did": "did:plc:abc"})
         )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile").mock(
+            return_value=httpx.Response(200, json={})
+        )
         respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
             return_value=httpx.Response(200, json={
                 "feed": [self._feed_item("at://did:plc:abc/post/1", RECENT)],
@@ -203,6 +206,44 @@ class TestCollectBluesky:
         assert result["platform"] == "bluesky"
         assert len(result["posts"]) == 1
         assert result["posts"][0]["likes"] == 3
+
+    def test_account_snapshot_from_get_profile(self, respx_mock):
+        """getProfile populates `account` on the result (#42)."""
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(200, json={"did": "did:plc:abc"})
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile").mock(
+            return_value=httpx.Response(200, json={
+                "followersCount": 892, "followsCount": 150, "postsCount": 2401,
+            })
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
+            return_value=httpx.Response(200, json={"feed": []})
+        )
+        result = collect_bluesky("alice.bsky.social", since=SINCE)
+        assert result["account"] == {
+            "followers": 892, "follows": 150, "posts_count": 2401,
+        }
+
+    def test_get_profile_failure_omits_account(self, respx_mock, caplog):
+        """If getProfile fails the collector logs and omits `account` —
+        it doesn't fail the whole run or synthesise 0s that would corrupt
+        the audience timeseries."""
+        import logging
+        respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
+            return_value=httpx.Response(200, json={"did": "did:plc:abc"})
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile").mock(
+            return_value=httpx.Response(500, text="server error")
+        )
+        respx_mock.get("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed").mock(
+            return_value=httpx.Response(200, json={"feed": []})
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.bluesky"):
+            result = collect_bluesky("alice.bsky.social", since=SINCE)
+        assert result is not None
+        assert "account" not in result
+        assert any("getProfile failed" in r.message for r in caplog.records)
 
     def test_failed_handle_resolve_returns_none(self, respx_mock):
         respx_mock.get("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle").mock(
