@@ -43,11 +43,13 @@ _AMAZON_CAPTCHA_MARKER = 'id="captchacharacters"'
 def _scrape_amazon_asin(client: httpx.Client, asin: str, marketplace: str) -> dict[str, Any]:
     """Fetch a single Amazon product page and extract public metrics."""
     r = client.get(f"https://www.{marketplace}/dp/{asin}", follow_redirects=True)
-    r.raise_for_status()
+    # CAPTCHA marker check runs BEFORE raise_for_status: Amazon sometimes
+    # serves the bot-check page with 503, and the generic http-error arm
+    # would otherwise retry the next ASIN against the same blocked IP.
     html = r.text
-
     if _AMAZON_CAPTCHA_MARKER in html:
         raise AmazonBlockedError(f"Bot/CAPTCHA page returned by {marketplace}")
+    r.raise_for_status()
 
     title_m = re.search(r'id="productTitle"[^>]*>\s*([^<]+)', html)
     title = title_m.group(1).strip() if title_m else None
@@ -105,6 +107,7 @@ def collect_amazon(
     with httpx.Client(timeout=30, headers=_AMAZON_HEADERS) as client:
         for marketplace in marketplaces:
             books = []
+            blocked = False
             for i, asin in enumerate(asins):
                 if i > 0:
                     time.sleep(1)
@@ -119,13 +122,17 @@ def collect_amazon(
                     )
                 except AmazonBlockedError:
                     logger.warning(
-                        "Amazon [%s]: bot detection triggered — skipping marketplace",
-                        marketplace,
+                        "Amazon [%s/%s]: bot detection triggered — dropping marketplace (%d earlier ASINs discarded)",
+                        marketplace, asin, len(books),
                     )
+                    blocked = True
                     break
                 except Exception as exc:
                     logger.warning("Amazon [%s/%s] failed: %s", marketplace, asin, exc)
-            if books:
+            # Discard anything collected before the block: the warning says
+            # "skipping marketplace", so the result must not silently include
+            # a truncated prefix of ASINs that happened to come in first.
+            if books and not blocked:
                 results[marketplace] = books
 
     if not results:

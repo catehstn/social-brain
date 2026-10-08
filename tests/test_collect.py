@@ -982,6 +982,57 @@ class TestCollectAmazon:
         assert result is None
         assert any("bot detection triggered" in r.message for r in caplog.records)
 
+    def test_captcha_detected_even_when_served_with_503(self, respx_mock, monkeypatch, caplog):
+        """Amazon sometimes serves the CAPTCHA page with HTTP 503. If we only
+        checked the marker after raise_for_status(), the generic http-error
+        arm would retry the next ASIN against the same blocked IP."""
+        import logging
+        monkeypatch.setattr("collectors.amazon.time.sleep", lambda _: None)
+        captcha_html = (
+            '<html><body><form action="/errors/validateCaptcha">'
+            '<input id="captchacharacters" name="field-keywords"></form></body></html>'
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0A").mock(
+            return_value=httpx.Response(503, text=captcha_html)
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0B").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.amazon"):
+            result = collect_amazon(["B0A", "B0B"], marketplaces=["amazon.co.uk"])
+        assert result is None
+        assert any("bot detection triggered" in r.message for r in caplog.records)
+
+    def test_captcha_mid_batch_discards_earlier_successes(self, respx_mock, monkeypatch, caplog):
+        """When the block fires after a few successful fetches, those earlier
+        ASINs are discarded too — the warning says 'dropping marketplace', the
+        output must not silently include a truncated prefix. Otherwise a
+        downstream rank comparison treats a short list as complete."""
+        import logging
+        monkeypatch.setattr("collectors.amazon.time.sleep", lambda _: None)
+        captcha_html = (
+            '<html><body><input id="captchacharacters"></body></html>'
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0A").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0B").mock(
+            return_value=httpx.Response(200, text=captcha_html)
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0C").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.amazon"):
+            result = collect_amazon(["B0A", "B0B", "B0C"], marketplaces=["amazon.co.uk"])
+        # amazon.co.uk is entirely absent — not partially present with B0A only.
+        assert result is None
+        # The warning tells the operator which ASIN triggered the block and
+        # that earlier successes were dropped.
+        assert any(
+            "B0B" in r.message and "earlier ASINs discarded" in r.message
+            for r in caplog.records
+        )
+
     def test_captcha_detection_does_not_match_product_page_mentioning_captcha(self, respx_mock):
         """A legit product page whose body text happens to mention 'captcha'
         (e.g. a book about CAPTCHAs) must NOT be classified as a bot-check

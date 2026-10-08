@@ -442,6 +442,21 @@ class TestMain:
             for r in caplog.records
         )
 
+    def test_collect_only_and_update_rejected(self, tmp_path, monkeypatch, caplog):
+        """Same silent-no-op shape as --platform + --update: --collect-only
+        also exits before the prompt step. The two flags must be rejected
+        together, not separately."""
+        import logging
+        _setup_main(tmp_path, monkeypatch, ["--collect-only", "--update"])
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(SystemExit) as exc_info:
+                run.main()
+        assert exc_info.value.code == 1
+        assert any(
+            "--update and --collect-only cannot be used together" in r.message
+            for r in caplog.records
+        )
+
     def test_platform_flag_skips_store_update(self, tmp_path, monkeypatch):
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--platform", "mastodon", "--collect-only"])
         mock_collect = MagicMock(return_value={"mastodon": {"posts": []}})

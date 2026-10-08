@@ -648,13 +648,17 @@ def main() -> None:
     if args.analyse_only and args.platform:
         logger.error("--analyse-only and --platform cannot be used together.")
         sys.exit(1)
-    if args.update and args.platform:
-        # --platform exits before the prompt step, so --update would be a
-        # silent no-op. Reject explicitly rather than drop the flag.
-        logger.error("--update and --platform cannot be used together — "
-                     "--platform skips the analyse step. "
-                     "Run them separately: `run.py --platform X` to refresh one "
-                     "platform's data, then `run.py --analyse-only --update`.")
+    if args.update and (args.platform or args.collect_only):
+        # Both --platform and --collect-only exit before the analyse step,
+        # so --update would be silently a no-op. Reject explicitly rather
+        # than drop the flag.
+        other = "--platform" if args.platform else "--collect-only"
+        logger.error(
+            "--update and %s cannot be used together — %s skips the analyse "
+            "step. Run them separately: do the data refresh, then "
+            "`run.py --analyse-only --update`.",
+            other, other,
+        )
         sys.exit(1)
 
     config = load_config()
