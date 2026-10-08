@@ -85,21 +85,31 @@ def _parse_linkedin_post_meta(html: str) -> tuple[str | None, str | None]:
             r"\s*\|\s*\d+ comments? on LinkedIn$", "", text_m.group(1)
         ).strip()
 
-    def _og(prop: str) -> str | None:
-        m = re.search(
-            rf'<meta[^>]+property="{re.escape(prop)}"[^>]+content="([^"]*)"', html
+    def _og_values(prop: str) -> list[str]:
+        """All values for a property. LinkedIn's HTML carries multiple
+        og:image tags on image posts (profile-displayphoto AND the
+        feedshare image); a single `re.search` would pick whichever
+        appears first and miss the signal we want."""
+        return re.findall(
+            rf'<meta[^>]+property="{re.escape(prop)}"[^>]+content="([^"]*)"',
+            html,
         )
-        return m.group(1) if m else None
 
-    og_image = _og("og:image") or ""
-    if _og("og:video") is not None:
+    def _og_first(prop: str) -> str | None:
+        values = _og_values(prop)
+        return values[0] if values else None
+
+    og_images = _og_values("og:image")
+    has_feedshare = any("feedshare" in img for img in og_images)
+
+    if _og_first("og:video") is not None:
         media_type: str | None = "video"
-    elif "feedshare" in og_image:
+    elif has_feedshare:
         # Checked ahead of the article/link branch: LinkedIn sets
         # `og:type = "article"` on both image posts and external-link
         # shares, so the image marker takes precedence.
         media_type = "image"
-    elif (_og("og:type") or "").lower() == "article":
+    elif (_og_first("og:type") or "").lower() == "article":
         media_type = "link"
     else:
         media_type = "text"

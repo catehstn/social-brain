@@ -695,6 +695,25 @@ class TestParseLinkedinPostMeta:
         _, media_type = _parse_linkedin_post_meta(html)
         assert media_type == "image"
 
+    def test_image_detected_when_profile_photo_precedes_feedshare(self):
+        """LinkedIn renders multiple og:image tags on an image post —
+        profile-displayphoto first, feedshare image second. A single
+        `re.search` would pick the profile URL (no feedshare), fall through
+        to the article branch, and mis-classify the post as 'link'. The
+        W38 signal #56 was meant to recover depends on this working."""
+        from collectors.linkedin import _parse_linkedin_post_meta
+        # Deliberately author profile-displayphoto FIRST, then feedshare.
+        html = (
+            '<html><head>'
+            '<meta property="og:description" content="Photo from the event">'
+            '<meta property="og:type" content="article">'
+            '<meta property="og:image" content="https://media.licdn.com/dms/image/v2/profile-displayphoto/0.jpg">'
+            '<meta property="og:image" content="https://media.licdn.com/dms/image/v2/feedshare-document-images/0.jpg">'
+            '</head><body></body></html>'
+        )
+        _, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "image"
+
     def test_text_only_when_og_image_is_the_author_profile_photo(self):
         """og:image is set on every LinkedIn post including plain text —
         it falls back to the author's profile photo. Presence alone must
