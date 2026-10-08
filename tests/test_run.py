@@ -32,6 +32,25 @@ def _write_config(path: Path, data: dict) -> None:
         yaml.dump(data, f)
 
 
+def _mock_store(tmp_path: Path, **overrides) -> MagicMock:
+    """Build the `store` MagicMock every TestMain test needs.
+
+    Every test has to stub `store.update`, `store.get_known_platforms`,
+    `store.storable_platforms` and `store.STORE_PATH`. Forgetting
+    `storable_platforms` is loud (`TypeError` from `set & MagicMock` at
+    the call site in run.py), not silent — but the boilerplate hurt
+    enough that #53 asked for this helper.
+    """
+    defaults = {
+        "update": MagicMock(),
+        "get_known_platforms": MagicMock(return_value=set()),
+        "storable_platforms": MagicMock(return_value=_STORABLE),
+        "STORE_PATH": tmp_path / "analytics.xlsx",
+    }
+    defaults.update(overrides)
+    return MagicMock(**defaults)
+
+
 def _minimal_config() -> dict:
     return {
         "mastodon_instance": "hachyderm.io",
@@ -497,17 +516,17 @@ class TestMain:
     def test_backfill_logs_completion(self, tmp_path, monkeypatch, caplog):
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
         mock_collect = MagicMock(return_value={"mastodon": {"posts": []}})
-        mock_get_known = MagicMock(return_value=set())  # forces backfill
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            # get_known_platforms=empty forces the backfill trigger.
+            "store": _mock_store(tmp_path),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             with caplog.at_level("INFO"):
                 run.main()
 
-        assert any("backfilling 3 months" in r.message for r in caplog.records)
+        assert any("backfilling 90 days" in r.message for r in caplog.records)
         assert any("backfill complete" in r.message for r in caplog.records)
 
     def test_months_flag_sets_since(self, tmp_path, monkeypatch):

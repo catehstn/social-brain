@@ -722,7 +722,7 @@ def main() -> None:
 
             if new_platforms and since is None:
                 logger.info(
-                    "Store: new platform(s) detected (%s) — backfilling 3 months",
+                    "Store: new platform(s) detected (%s) — backfilling 90 days",
                     ", ".join(sorted(new_platforms)),
                 )
                 backfill_since = datetime.now(timezone.utc) - timedelta(days=90)

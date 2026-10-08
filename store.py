@@ -83,6 +83,11 @@ def get_known_platforms(store_path: Path = STORE_PATH) -> set[str]:
             "web_analytics": "posthog",
             "amazon": "amazon",
             "goatcounter": "goatcounter",
+            # Dead entry: `_process_mentions` emits `hn_mentions`,
+            # `mastodon_mentions`, `bluesky_mentions`, `gsc_queries` —
+            # none starts with "mentions". Kept so a reader looking here
+            # finds the pointer: `run.py` compensates by hard-coding a
+            # `{"mentions"}` exclusion on the backfill trigger (#53).
             "mentions": "mentions",
             "stripe": "stripe",
         }
