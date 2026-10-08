@@ -88,6 +88,15 @@ def get_known_platforms(store_path: Path = STORE_PATH) -> set[str]:
             # none starts with "mentions". Kept so a reader looking here
             # finds the pointer: `run.py` compensates by hard-coding a
             # `{"mentions"}` exclusion on the backfill trigger (#53).
+            #
+            # Related latent bug (not fixed here): `mastodon_mentions` and
+            # `bluesky_mentions` DO match the `mastodon` and `bluesky`
+            # prefixes above, so a user who ran mentions-only first would
+            # see `known = {"mastodon", "bluesky"}` and the first real
+            # mastodon/bluesky post collection would skip its 90-day
+            # backfill. The right fix is to derive `known` from an
+            # explicit processor-to-sheets map rather than prefix-match;
+            # #53's "cheapest option" sidesteps it.
             "mentions": "mentions",
             "stripe": "stripe",
         }

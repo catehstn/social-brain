@@ -40,10 +40,12 @@ def _mock_store(tmp_path: Path, **overrides) -> MagicMock:
     a bare spy. Tests that want backfill behaviour override
     `get_known_platforms=MagicMock(return_value=set())`.
 
-    `spec=store` is used so a test that references a new symbol (e.g.
-    `store.NEW_SYMBOL` added to run.py) fails loudly here instead of
-    returning an auto-created MagicMock that silently satisfies truthy
-    checks.
+    `spec=store` catches attribute references `run.py` makes under names
+    the real `store` module does not export (typos, removed symbols) —
+    but **not** symbols that exist on the module but aren't configured
+    here, which still auto-mock. New store symbols added later still
+    need to be wired in via `overrides` for a test to assert anything
+    about them.
     """
     import store
     defaults = {
