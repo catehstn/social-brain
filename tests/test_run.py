@@ -32,6 +32,32 @@ def _write_config(path: Path, data: dict) -> None:
         yaml.dump(data, f)
 
 
+def _mock_store(tmp_path: Path, **overrides) -> MagicMock:
+    """Build the `store` MagicMock every TestMain test needs.
+
+    Defaults are the no-op path: `get_known_platforms` returns the full
+    storable set so the backfill trigger does not fire, and `update` is
+    a bare spy. Tests that want backfill behaviour override
+    `get_known_platforms=MagicMock(return_value=set())`.
+
+    `spec=store` catches attribute references `run.py` makes under names
+    the real `store` module does not export (typos, removed symbols) —
+    but **not** symbols that exist on the module but aren't configured
+    here, which still auto-mock. New store symbols added later still
+    need to be wired in via `overrides` for a test to assert anything
+    about them.
+    """
+    import store
+    defaults = {
+        "update": MagicMock(),
+        "get_known_platforms": MagicMock(return_value=_STORABLE),
+        "storable_platforms": MagicMock(return_value=_STORABLE),
+        "STORE_PATH": tmp_path / "analytics.xlsx",
+    }
+    defaults.update(overrides)
+    return MagicMock(spec=store, **defaults)
+
+
 def _minimal_config() -> dict:
     return {
         "mastodon_instance": "hachyderm.io",
@@ -556,17 +582,19 @@ class TestMain:
     def test_backfill_logs_completion(self, tmp_path, monkeypatch, caplog):
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--collect-only"])
         mock_collect = MagicMock(return_value={"mastodon": {"posts": []}})
-        mock_get_known = MagicMock(return_value=set())  # forces backfill
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            "store": MagicMock(update=MagicMock(), get_known_platforms=mock_get_known, storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            # Override the helper's neutral default to force the backfill
+            # trigger (empty known platforms + a collected one).
+            "store": _mock_store(tmp_path,
+                                 get_known_platforms=MagicMock(return_value=set())),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             with caplog.at_level("INFO"):
                 run.main()
 
-        assert any("backfilling 3 months" in r.message for r in caplog.records)
+        assert any("backfilling 90 days" in r.message for r in caplog.records)
         assert any("backfill complete" in r.message for r in caplog.records)
 
     def test_months_flag_sets_since(self, tmp_path, monkeypatch):

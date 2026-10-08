@@ -5,7 +5,7 @@ Maintains data/analytics.xlsx as a running history of all collected data.
 Each platform's data lives in one or more sheets and is upserted on each run —
 metrics that change (likes, boosts, rank) get overwritten; new rows are appended.
 
-On first run for a platform (no rows yet), the caller should collect 3 months
+On first run for a platform (no rows yet), the caller should collect 90 days
 of data so history is populated from day one. Subsequent runs can use any
 window — rows accumulate and update in place.
 """
@@ -83,6 +83,20 @@ def get_known_platforms(store_path: Path = STORE_PATH) -> set[str]:
             "web_analytics": "posthog",
             "amazon": "amazon",
             "goatcounter": "goatcounter",
+            # Dead entry: `_process_mentions` emits `hn_mentions`,
+            # `mastodon_mentions`, `bluesky_mentions`, `gsc_queries` —
+            # none starts with "mentions". Kept so a reader looking here
+            # finds the pointer: `run.py` compensates by hard-coding a
+            # `{"mentions"}` exclusion on the backfill trigger (#53).
+            #
+            # Related latent bug (not fixed here): `mastodon_mentions` and
+            # `bluesky_mentions` DO match the `mastodon` and `bluesky`
+            # prefixes above, so a user who ran mentions-only first would
+            # see `known = {"mastodon", "bluesky"}` and the first real
+            # mastodon/bluesky post collection would skip its 90-day
+            # backfill. The right fix is to derive `known` from an
+            # explicit processor-to-sheets map rather than prefix-match;
+            # #53's "cheapest option" sidesteps it.
             "mentions": "mentions",
             "stripe": "stripe",
         }

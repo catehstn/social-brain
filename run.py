@@ -730,7 +730,7 @@ def main() -> None:
             # Only backfill for platforms we actually persist. Otherwise
             # anything collected-but-not-stored (calendly, oreilly,
             # upcoming) looks perpetually "new" and triggers a silent
-            # 3-month re-collect on every run — see #51.
+            # 90-day re-collect on every run — see #51.
             # `mentions` is separately excluded: it IS persisted, but its
             # sheets are named `hn_mentions`, `mastodon_mentions`, etc.,
             # which `get_known_platforms` (prefix-based) can never detect,
@@ -740,7 +740,7 @@ def main() -> None:
 
             if new_platforms and since is None:
                 logger.info(
-                    "Store: new platform(s) detected (%s) — backfilling 3 months",
+                    "Store: new platform(s) detected (%s) — backfilling 90 days",
                     ", ".join(sorted(new_platforms)),
                 )
                 backfill_since = datetime.now(timezone.utc) - timedelta(days=90)
