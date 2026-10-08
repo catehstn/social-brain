@@ -4,7 +4,7 @@ A Python CLI that collects analytics from your social and publishing platforms, 
 
 1. **A performance report** — what worked, what didn't, cross-platform patterns, 5 content ideas grounded in your data, and a gap analysis based on your primary focus
 2. **An interactive dashboard** — a self-contained React artifact that renders directly in claude.ai, no server needed
-3. **A persistent spreadsheet** — `data/analytics.xlsx` accumulates data across runs; new platforms automatically backfill 3 months
+3. **A persistent spreadsheet** — `data/analytics.xlsx` accumulates data across runs; new platforms automatically backfill 90 days
 
 ---
 
@@ -288,7 +288,7 @@ If you haven't run in more than two weeks, the lookback window is automatically 
 Every run updates `data/analytics.xlsx` — a multi-sheet spreadsheet that accumulates data over time:
 
 - **Upsert semantics**: existing rows are updated if the underlying data changed (e.g. a post gains more likes)
-- **Automatic backfill**: when a new platform is first detected, 3 months of data are collected and stored
+- **Automatic backfill**: when a new platform is first detected, 90 days of data are collected and stored
 - The file is gitignored and stays local
 
 ---

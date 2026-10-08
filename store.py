@@ -5,7 +5,7 @@ Maintains data/analytics.xlsx as a running history of all collected data.
 Each platform's data lives in one or more sheets and is upserted on each run —
 metrics that change (likes, boosts, rank) get overwritten; new rows are appended.
 
-On first run for a platform (no rows yet), the caller should collect 3 months
+On first run for a platform (no rows yet), the caller should collect 90 days
 of data so history is populated from day one. Subsequent runs can use any
 window — rows accumulate and update in place.
 """

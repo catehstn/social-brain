@@ -35,20 +35,25 @@ def _write_config(path: Path, data: dict) -> None:
 def _mock_store(tmp_path: Path, **overrides) -> MagicMock:
     """Build the `store` MagicMock every TestMain test needs.
 
-    Every test has to stub `store.update`, `store.get_known_platforms`,
-    `store.storable_platforms` and `store.STORE_PATH`. Forgetting
-    `storable_platforms` is loud (`TypeError` from `set & MagicMock` at
-    the call site in run.py), not silent — but the boilerplate hurt
-    enough that #53 asked for this helper.
+    Defaults are the no-op path: `get_known_platforms` returns the full
+    storable set so the backfill trigger does not fire, and `update` is
+    a bare spy. Tests that want backfill behaviour override
+    `get_known_platforms=MagicMock(return_value=set())`.
+
+    `spec=store` is used so a test that references a new symbol (e.g.
+    `store.NEW_SYMBOL` added to run.py) fails loudly here instead of
+    returning an auto-created MagicMock that silently satisfies truthy
+    checks.
     """
+    import store
     defaults = {
         "update": MagicMock(),
-        "get_known_platforms": MagicMock(return_value=set()),
+        "get_known_platforms": MagicMock(return_value=_STORABLE),
         "storable_platforms": MagicMock(return_value=_STORABLE),
         "STORE_PATH": tmp_path / "analytics.xlsx",
     }
     defaults.update(overrides)
-    return MagicMock(**defaults)
+    return MagicMock(spec=store, **defaults)
 
 
 def _minimal_config() -> dict:
@@ -519,8 +524,10 @@ class TestMain:
 
         with patch.dict("sys.modules", {
             "collect": MagicMock(collect_all=mock_collect),
-            # get_known_platforms=empty forces the backfill trigger.
-            "store": _mock_store(tmp_path),
+            # Override the helper's neutral default to force the backfill
+            # trigger (empty known platforms + a collected one).
+            "store": _mock_store(tmp_path,
+                                 get_known_platforms=MagicMock(return_value=set())),
             "analyse": MagicMock(save_prompt=MagicMock()),
         }):
             with caplog.at_level("INFO"):
