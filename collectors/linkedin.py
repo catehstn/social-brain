@@ -39,8 +39,12 @@ def _fetch_linkedin_post_meta(url: str) -> tuple[str | None, str | None]:
     `None` if the fetch failed. Classified from the Open Graph meta tags
     LinkedIn renders on the post page:
 
-    - `og:video` → `"video"` (covers both native video and audiograms,
-      which is the signal the W38 content review needed — #56).
+    - `og:video` pointing at a LinkedIn-hosted URL (licdn.com /
+      linkedin.com) → `"video"` — this covers native video and
+      audiograms, which is the signal the W38 content review needed
+      (#56). A YouTube/Vimeo/Loom embed also carries `og:video` but
+      falls through to the link branch, since LinkedIn renders those
+      as external link shares with a video preview.
     - `og:type = "article"` → `"link"` — a shared external link.
     - `og:image` with a path containing `feedshare` → `"image"` — a user-
       uploaded image. The author's `profile-displayphoto` also appears as
@@ -101,8 +105,16 @@ def _parse_linkedin_post_meta(html: str) -> tuple[str | None, str | None]:
 
     og_images = _og_values("og:image")
     has_feedshare = any("feedshare" in img for img in og_images)
+    og_video = _og_first("og:video") or ""
+    # LinkedIn-hosted videos sit on media.licdn.com or dms.licdn.com; an
+    # og:video pointing elsewhere (YouTube/Vimeo/Loom etc.) is an external
+    # link share rendered with a video preview, not a native video post.
+    # Keeping those as 'link' matches the W38 analysis the field exists for.
+    is_linkedin_hosted_video = bool(og_video) and (
+        "licdn.com" in og_video or ".linkedin.com" in og_video
+    )
 
-    if _og_first("og:video") is not None:
+    if is_linkedin_hosted_video:
         media_type: str | None = "video"
     elif has_feedshare:
         # Checked ahead of the article/link branch: LinkedIn sets

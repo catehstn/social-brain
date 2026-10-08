@@ -673,6 +673,21 @@ class TestParseLinkedinPostMeta:
         assert media_type == "video"
         assert text == "A clip from the latest talk"
 
+    def test_external_video_link_share_is_classified_as_link_not_video(self):
+        """A YouTube/Vimeo/Loom share carries og:type=article AND an
+        og:video pointing at the external domain. LinkedIn renders those
+        as link previews with video thumbs, not as native videos — the
+        W38 analysis needs them bucketed as 'link', not 'video'."""
+        from collectors.linkedin import _parse_linkedin_post_meta
+        html = self._wrap({
+            "og:description": "Great talk on tenure",
+            "og:type": "article",
+            "og:video": "https://www.youtube.com/embed/abc123",
+            "og:image": "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
+        })
+        _, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "link"
+
     def test_link_share_detected_from_og_type_article(self):
         from collectors.linkedin import _parse_linkedin_post_meta
         html = self._wrap({

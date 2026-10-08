@@ -217,7 +217,9 @@ def _process_linkedin(collected: dict, sheets: dict, store_path: Path, now: str)
         } for d in daily if d.get("date")])
         sheets["linkedin_daily"] = _upsert(_load(store_path, "linkedin_daily"), df_new, ["date"])
 
-    # Merge engagement and impressions lists by URL
+    # Merge engagement and impressions lists by URL. Carries the
+    # media_type field through so a long-horizon "video vs text vs link"
+    # analysis can run from the store rather than per-week JSON (#56).
     all_posts: dict[str, dict] = {}
     for p in collected.get("top_posts_by_engagement", []):
         url = p.get("url", "")
@@ -226,7 +228,8 @@ def _process_linkedin(collected: dict, sheets: dict, store_path: Path, now: str)
                 "url": url,
                 "date": p.get("date", ""),
                 "engagements": p.get("engagements"),
-                "impressions": None,
+                "impressions": p.get("impressions"),
+                "media_type": p.get("media_type"),
                 "text": str(p.get("text") or "")[:500],
                 "last_updated": now,
             }
@@ -234,13 +237,17 @@ def _process_linkedin(collected: dict, sheets: dict, store_path: Path, now: str)
         url = p.get("url", "")
         if url:
             if url in all_posts:
-                all_posts[url]["impressions"] = p.get("impressions")
+                if all_posts[url].get("impressions") is None:
+                    all_posts[url]["impressions"] = p.get("impressions")
+                if all_posts[url].get("media_type") is None:
+                    all_posts[url]["media_type"] = p.get("media_type")
             else:
                 all_posts[url] = {
                     "url": url,
                     "date": p.get("date", ""),
                     "engagements": None,
                     "impressions": p.get("impressions"),
+                    "media_type": p.get("media_type"),
                     "text": str(p.get("text") or "")[:500],
                     "last_updated": now,
                 }
