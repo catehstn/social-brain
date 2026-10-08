@@ -2380,6 +2380,224 @@ class TestCollectCalendly:
         assert result["total_bookings"] == 2  # both event types counted
 
 
+class TestCalendlyAttributionClassifier:
+    """`_classify_attribution` buckets free-text 'How did you hear about me?'
+    answers (#57). No PII leaves the classifier — only the channel label."""
+
+    def test_linkedin_wins_over_named_person(self):
+        """'Cate's LinkedIn' is LinkedIn (the channel), not Cate (the person)
+        — the issue's explicit grouping rule."""
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("Cate's LinkedIn") == "LinkedIn"
+        assert _classify_attribution("From Jean's LinkedIn repost") == "LinkedIn"
+
+    def test_oreilly_wins_over_newsletter(self):
+        """'O'Reilly newsletter' bu is a course-side origin — O'Reilly, not
+        generic Newsletter — the issue's channel-first grouping."""
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("O'Reilly newsletter") == "O'Reilly"
+        # Curly apostrophe (U+2019) from copy-paste must also match.
+        assert _classify_attribution("O’Reilly course") == "O'Reilly"
+
+    def test_direct_platform_matches(self):
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("LinkedIn") == "LinkedIn"
+        assert _classify_attribution("The newsletter") == "Newsletter"
+        assert _classify_attribution("Buttondown subscriber") == "Newsletter"
+        assert _classify_attribution("Substack post") == "Newsletter"
+        assert _classify_attribution("O'Reilly course") == "O'Reilly"
+        assert _classify_attribution("oreilly") == "O'Reilly"
+
+    def test_named_people_without_channel(self):
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("From Cate directly") == "Cate"
+        assert _classify_attribution("Jean recommended") == "Jean"
+
+    def test_named_people_do_not_false_match_substrings(self):
+        """A bare `in` check mis-bucketed 'educator', 'advocate', 'communicate',
+        'dedicate' and 'jeans' to Cate/Jean. Word-boundary matching pins it."""
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("An educator recommended you") == "Word of mouth"
+        assert _classify_attribution("A dedicated friend of mine") == "Word of mouth"
+        assert _classify_attribution("I bought jeans") == "Other"
+        assert _classify_attribution("Vacate your assumptions") == "Other"
+
+    def test_word_of_mouth_catch_all(self):
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("A friend recommended you") == "Word of mouth"
+        assert _classify_attribution("my colleague") == "Word of mouth"
+        assert _classify_attribution("word of mouth") == "Word of mouth"
+        assert _classify_attribution("referral from someone") == "Word of mouth"
+
+    def test_unmatched_is_other(self):
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("Google search") == "Other"
+        assert _classify_attribution("Saw a talk") == "Other"
+
+    def test_empty_or_whitespace_or_none_is_unknown(self):
+        """Whitespace-only answers are the same shape as empty — a user hit
+        submit without typing. Must not fall through to 'Other'."""
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution(None) == "Unknown"
+        assert _classify_attribution("") == "Unknown"
+        assert _classify_attribution("   ") == "Unknown"
+        assert _classify_attribution("\t\n") == "Unknown"
+
+
+@pytest.mark.respx(base_url="https://api.calendly.com")
+class TestCalendlyAttributionEndToEnd:
+    """`collect_calendly` fetches invitees per active event and surfaces
+    the attribution channel + a rollup. Canceled events are counted but
+    not attributed (#57)."""
+
+    EVENT_URI_1 = "https://api.calendly.com/scheduled_events/evt1"
+    EVENT_URI_2 = "https://api.calendly.com/scheduled_events/evt2"
+
+    def test_attribution_channel_surfaced_per_booking(self, respx_mock):
+        _calendly_mock(respx_mock)
+        active = [
+            {"event_type": ET_URI_INTRO, "uri": self.EVENT_URI_1,
+             "start_time": "2026-09-14T10:00:00.000000Z"},
+            {"event_type": ET_URI_INTRO, "uri": self.EVENT_URI_2,
+             "start_time": "2026-09-15T11:00:00.000000Z"},
+        ]
+
+        def events_side_effect(request):
+            params = dict(request.url.params)
+            if params.get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            side_effect=events_side_effect
+        )
+        # Event 1: a LinkedIn referral. Event 2: a word-of-mouth one.
+        respx_mock.get(f"{self.EVENT_URI_1}/invitees").mock(
+            return_value=httpx.Response(200, json={"collection": [{
+                "questions_and_answers": [
+                    {"question": "How did you hear about me?",
+                     "answer": "From Cate's LinkedIn"},
+                ],
+            }]})
+        )
+        respx_mock.get(f"{self.EVENT_URI_2}/invitees").mock(
+            return_value=httpx.Response(200, json={"collection": [{
+                "questions_and_answers": [
+                    {"question": "How did you hear about me?",
+                     "answer": "A friend recommended you"},
+                ],
+            }]})
+        )
+
+        result = collect_calendly("tok", since=SINCE)
+        assert result["attribution_by_channel"] == {"LinkedIn": 1, "Word of mouth": 1}
+        # The output stays rollup-only — no per-booking list, no PII fields,
+        # no uncapped list for `_trim_data` to worry about.
+        assert "bookings" not in result
+
+    def test_booking_with_null_questions_and_answers_is_unknown(self, respx_mock):
+        """Calendly returns `questions_and_answers: null` when there are no
+        questions. `.get(key, [])` would return None (default only fires on
+        missing keys, not null values), and `for qa in None:` would raise
+        TypeError and drop the whole event's attribution."""
+        _calendly_mock(respx_mock)
+        active = [{"event_type": ET_URI_INTRO, "uri": self.EVENT_URI_1,
+                   "start_time": "2026-09-14T10:00:00Z"}]
+
+        def events_side_effect(request):
+            if dict(request.url.params).get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            side_effect=events_side_effect
+        )
+        respx_mock.get(f"{self.EVENT_URI_1}/invitees").mock(
+            return_value=httpx.Response(200, json={"collection": [
+                {"questions_and_answers": None},
+            ]})
+        )
+        result = collect_calendly("tok", since=SINCE)
+        assert result["attribution_by_channel"] == {"Unknown": 1}
+
+    def test_booking_with_no_matching_question_is_unknown(self, respx_mock):
+        """An invitee with q&a but no 'hear about me' question → Unknown.
+        No PII leaks even though the raw q&a exists in the payload."""
+        _calendly_mock(respx_mock)
+        active = [{"event_type": ET_URI_INTRO, "uri": self.EVENT_URI_1,
+                   "start_time": "2026-09-14T10:00:00Z"}]
+
+        def events_side_effect(request):
+            if dict(request.url.params).get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            side_effect=events_side_effect
+        )
+        respx_mock.get(f"{self.EVENT_URI_1}/invitees").mock(
+            return_value=httpx.Response(200, json={"collection": [{
+                "questions_and_answers": [
+                    {"question": "Any dietary requirements?", "answer": "None"},
+                ],
+            }]})
+        )
+        result = collect_calendly("tok", since=SINCE)
+        assert result["attribution_by_channel"] == {"Unknown": 1}
+        # The raw q&a stays out of the result — no PII flows past the collector.
+        import json
+        assert "dietary" not in json.dumps(result).lower()
+
+    def test_invitees_fetch_failure_degrades_gracefully(self, respx_mock):
+        """A failing invitees call for one event drops that one booking's
+        attribution to Unknown (via None), not the whole collector."""
+        _calendly_mock(respx_mock)
+        active = [{"event_type": ET_URI_INTRO, "uri": self.EVENT_URI_1,
+                   "start_time": "2026-09-14T10:00:00Z"}]
+
+        def events_side_effect(request):
+            if dict(request.url.params).get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            side_effect=events_side_effect
+        )
+        respx_mock.get(f"{self.EVENT_URI_1}/invitees").mock(
+            return_value=httpx.Response(500, json={"message": "server error"})
+        )
+        result = collect_calendly("tok", since=SINCE)
+        # Booking still counted; attribution bucketed as Unknown so the rollup
+        # continues to sum to total_bookings.
+        assert result["total_bookings"] == 1
+        assert result["attribution_by_channel"] == {"Unknown": 1}
+        assert sum(result["attribution_by_channel"].values()) == result["total_bookings"]
+
+    def test_event_without_uri_does_not_fire_bogus_request(self, respx_mock, caplog):
+        """Active events whose payload lacks `uri` must short-circuit — a
+        bare `client.get('/invitees')` would spam logs with 'failed for ' on
+        every CI run."""
+        import logging
+        _calendly_mock(respx_mock)
+        active = [{"event_type": ET_URI_INTRO}]  # no uri
+
+        def events_side_effect(request):
+            if dict(request.url.params).get("status") == "active":
+                return httpx.Response(200, json={"collection": active})
+            return httpx.Response(200, json={"collection": []})
+
+        respx_mock.get("https://api.calendly.com/scheduled_events").mock(
+            side_effect=events_side_effect
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.calendly"):
+            result = collect_calendly("tok", since=SINCE)
+        assert result["attribution_by_channel"] == {"Unknown": 1}
+        # No "invitees fetch failed for " noise.
+        assert not any(
+            "invitees fetch failed" in r.message for r in caplog.records
+        )
+
+
 # ---------------------------------------------------------------------------
 # Upcoming
 # ---------------------------------------------------------------------------
