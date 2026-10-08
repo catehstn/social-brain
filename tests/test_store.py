@@ -909,6 +909,123 @@ class TestUpdate:
         assert len(result) == 1
         assert result.iloc[0]["platform"] == "mastodon"
 
+    def test_account_snapshots_mastodon_writes_all_three_metrics(self, tmp_path):
+        """When the collector returns the full account dict, all three
+        metrics land as separate rows (#42)."""
+        path = tmp_path / "analytics.xlsx"
+        update({
+            "mastodon": {
+                "handle": "cate@hachyderm.io",
+                "posts": [],
+                "new_follows": [],
+                "account": {"followers": 1200, "following": 300, "statuses_count": 2000},
+            }
+        }, store_path=path)
+        result = _load(path, "account_snapshots")
+        assert set(result["metric"]) == {"followers", "following", "statuses_count"}
+        values = {row["metric"]: int(row["value"]) for _, row in result.iterrows()}
+        assert values == {"followers": 1200, "following": 300, "statuses_count": 2000}
+
+    def test_account_snapshots_skips_missing_mastodon_metric(self, tmp_path):
+        """A pre-#42 payload that only carries `followers` must not write a
+        0 for `following` and `statuses_count` — that would regress real
+        data into the timeseries. Only populated keys land."""
+        path = tmp_path / "analytics.xlsx"
+        update({
+            "mastodon": {
+                "handle": "x",
+                "posts": [],
+                "new_follows": [],
+                "account": {"followers": 1200},
+            }
+        }, store_path=path)
+        result = _load(path, "account_snapshots")
+        assert set(result["metric"]) == {"followers"}
+
+    def test_account_snapshots_bluesky_writes_three_metrics(self, tmp_path):
+        """Bluesky now contributes the audience timeseries (#42)."""
+        path = tmp_path / "analytics.xlsx"
+        update({
+            "bluesky": {
+                "handle": "cate.bsky.social",
+                "posts": [],
+                "account": {"followers": 800, "follows": 150, "posts_count": 1200},
+            }
+        }, store_path=path)
+        result = _load(path, "account_snapshots")
+        assert set(result["platform"]) == {"bluesky"}
+        assert set(result["metric"]) == {"followers", "follows", "posts_count"}
+
+    def test_account_snapshots_bluesky_absent_when_profile_fetch_failed(self, tmp_path):
+        """If getProfile failed, the collector omits `account` — no rows."""
+        path = tmp_path / "analytics.xlsx"
+        update({
+            "bluesky": {
+                "handle": "x",
+                "posts": [],
+            }
+        }, store_path=path)
+        import pandas as pd
+        result = _load(path, "account_snapshots")
+        # Sheet may not exist at all when no row was ever written.
+        assert result is None or result.empty or len(result) == 0
+
+    def test_account_snapshots_linkedin_followers_from_xlsx(self, tmp_path):
+        """LinkedIn's XLSX export carries total_followers on the FOLLOWERS
+        sheet. Persisted as the audience-size snapshot (#42)."""
+        path = tmp_path / "analytics.xlsx"
+        update({
+            "linkedin": {
+                "followers": {"total_followers": 4213, "daily_new_followers": []},
+                "daily_engagement": [],
+                "top_posts_by_engagement": [],
+                "top_posts_by_impressions": [],
+            }
+        }, store_path=path)
+        result = _load(path, "account_snapshots")
+        row = result[result["platform"] == "linkedin"].iloc[0]
+        assert row["metric"] == "followers"
+        assert int(row["value"]) == 4213
+
+    def test_account_snapshots_linkedin_absent_when_followers_missing(self, tmp_path):
+        """A XLSX export without a FOLLOWERS sheet carries no total_followers.
+        No row should be written."""
+        path = tmp_path / "analytics.xlsx"
+        update({
+            "linkedin": {
+                "daily_engagement": [],
+                "top_posts_by_engagement": [],
+                "top_posts_by_impressions": [],
+            }
+        }, store_path=path)
+        result = _load(path, "account_snapshots")
+        assert result is None or result.empty or len(result) == 0
+
+    def test_account_snapshots_cross_platform(self, tmp_path):
+        """Three platforms in one collect run → one row per (platform,
+        metric), all written to the same sheet."""
+        path = tmp_path / "analytics.xlsx"
+        update({
+            "mastodon": {
+                "posts": [], "new_follows": [],
+                "account": {"followers": 1200, "following": 300, "statuses_count": 2000},
+            },
+            "bluesky": {
+                "posts": [],
+                "account": {"followers": 800, "follows": 150, "posts_count": 1200},
+            },
+            "linkedin": {
+                "followers": {"total_followers": 4213, "daily_new_followers": []},
+                "daily_engagement": [],
+                "top_posts_by_engagement": [],
+                "top_posts_by_impressions": [],
+            },
+        }, store_path=path)
+        result = _load(path, "account_snapshots")
+        assert set(result["platform"]) == {"mastodon", "bluesky", "linkedin"}
+        # 3 mastodon + 3 bluesky + 1 linkedin
+        assert len(result) == 7
+
 
 # ---------------------------------------------------------------------------
 # _process_mentions — flat schema (matches what collectors/mentions.py returns)

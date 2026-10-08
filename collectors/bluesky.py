@@ -36,6 +36,22 @@ def collect_bluesky(
             r.raise_for_status()
             did = r.json()["did"]
 
+            # Snapshot account-level counts for the audience-growth timeseries
+            # (#42). Non-fatal if it fails — the feed collection remains the
+            # primary job of this collector.
+            account: dict[str, int] = {}
+            try:
+                r = client.get(f"{base}/app.bsky.actor.getProfile", params={"actor": did})
+                r.raise_for_status()
+                profile = r.json()
+                account = {
+                    "followers": int(profile.get("followersCount", 0)),
+                    "follows": int(profile.get("followsCount", 0)),
+                    "posts_count": int(profile.get("postsCount", 0)),
+                }
+            except Exception as exc:
+                logger.warning("Bluesky getProfile failed (%s) — skipping account snapshot", exc)
+
             cursor: str | None = None
             while True:
                 params: dict[str, Any] = {"actor": did, "limit": 50}
@@ -165,6 +181,8 @@ def collect_bluesky(
             "since": _iso(since),
             "posts": posts,
         }
+        if account:
+            result["account"] = account
         if new_follows:
             result["new_follows"] = new_follows
             result["new_follows_count"] = len(new_follows)
