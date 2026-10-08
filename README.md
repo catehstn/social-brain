@@ -247,7 +247,7 @@ python run.py --months 3           # longer lookback window
 python run.py --collect-only       # collect and store data, skip prompt
 python run.py --analyse-only       # build prompt from last saved data (fresh chat)
 python run.py --analyse-only --months 3  # same, with 3-month label in filename
-python run.py --platform mastodon  # single platform
+python run.py --platform mastodon  # refresh one platform's data (does NOT touch the weekly snapshot or regenerate the prompt — follow with --analyse-only)
 python run.py --update             # collect + build a compact update prompt
 python run.py --analyse-only --update  # update prompt from last saved data
 python run.py --auth linkedin      # (EU only) OAuth flow to get a LinkedIn API token

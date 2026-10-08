@@ -23,14 +23,31 @@ _AMAZON_HEADERS = {
 }
 
 
+class AmazonBlockedError(Exception):
+    """Amazon served a bot-check page instead of the product page.
+
+    Classified by its own exception so the collect loop can distinguish
+    'this marketplace is blocking us — skip the rest' from the ordinary
+    parse failures of `_scrape_amazon_asin` (which also raise `ValueError`
+    for bad numeric substrings), without the loop having to grep the
+    exception message for 'CAPTCHA'/'Bot'.
+    """
+
+
+# Marker found on Amazon's own bot-check page. Specific — a product page
+# whose copy happens to mention "captcha" (a book about CAPTCHAs, a
+# security-related product listing) will not carry this element.
+_AMAZON_CAPTCHA_MARKER = 'id="captchacharacters"'
+
+
 def _scrape_amazon_asin(client: httpx.Client, asin: str, marketplace: str) -> dict[str, Any]:
     """Fetch a single Amazon product page and extract public metrics."""
     r = client.get(f"https://www.{marketplace}/dp/{asin}", follow_redirects=True)
     r.raise_for_status()
     html = r.text
 
-    if "captcha" in html.lower() or 'id="captchacharacters"' in html:
-        raise ValueError(f"Bot/CAPTCHA page returned by {marketplace}")
+    if _AMAZON_CAPTCHA_MARKER in html:
+        raise AmazonBlockedError(f"Bot/CAPTCHA page returned by {marketplace}")
 
     title_m = re.search(r'id="productTitle"[^>]*>\s*([^<]+)', html)
     title = title_m.group(1).strip() if title_m else None
@@ -88,10 +105,7 @@ def collect_amazon(
     with httpx.Client(timeout=30, headers=_AMAZON_HEADERS) as client:
         for marketplace in marketplaces:
             books = []
-            blocked = False
             for i, asin in enumerate(asins):
-                if blocked:
-                    break
                 if i > 0:
                     time.sleep(1)
                 try:
@@ -103,12 +117,12 @@ def collect_amazon(
                         book["rating"], book["reviews"],
                         book["title"] or "(no title)",
                     )
-                except ValueError as exc:
-                    if "CAPTCHA" in str(exc) or "Bot" in str(exc):
-                        logger.warning("Amazon [%s]: bot detection triggered — skipping marketplace", marketplace)
-                        blocked = True
-                    else:
-                        logger.warning("Amazon [%s/%s] failed: %s", marketplace, asin, exc)
+                except AmazonBlockedError:
+                    logger.warning(
+                        "Amazon [%s]: bot detection triggered — skipping marketplace",
+                        marketplace,
+                    )
+                    break
                 except Exception as exc:
                     logger.warning("Amazon [%s/%s] failed: %s", marketplace, asin, exc)
             if books:

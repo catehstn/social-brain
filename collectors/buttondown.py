@@ -166,7 +166,10 @@ def collect_buttondown(
                 account_newsletters = [{"name": "default", "api_key": api_key}]
 
             for nl in account_newsletters:
-                nl_name = nl.get("name") or nl.get("domain") or nl.get("id", "default")
+                # `.get(key, default)` only fires the default on missing key —
+                # a payload with `"name": null` would still return None. Final
+                # `or "default"` catches that and the empty-string case.
+                nl_name = nl.get("name") or nl.get("domain") or nl.get("id") or "default"
                 nl_key = nl.get("api_key", api_key)
                 try:
                     emails, count, tag_totals, tag_new = _collect_buttondown_newsletter(

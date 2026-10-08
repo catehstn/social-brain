@@ -960,6 +960,42 @@ class TestCollectAmazon:
         assert "amazon.com" in result["by_marketplace"]
         assert "amazon.co.uk" in result["by_marketplace"]
 
+    def test_captcha_page_skips_rest_of_marketplace(self, respx_mock, monkeypatch, caplog):
+        """A bot-check page (not a transient fetch error) should drop the whole
+        marketplace instead of filling it with all-nulls per ASIN."""
+        import logging
+        monkeypatch.setattr("collectors.amazon.time.sleep", lambda _: None)
+        captcha_html = (
+            '<html><body><form action="/errors/validateCaptcha">'
+            '<input id="captchacharacters" name="field-keywords"></form></body></html>'
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=captcha_html)
+        )
+        # A second ASIN that would succeed if the collector didn't bail.
+        respx_mock.get("https://www.amazon.co.uk/dp/B0OTHER").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.amazon"):
+            result = collect_amazon(["B0CW1MYCGK", "B0OTHER"], marketplaces=["amazon.co.uk"])
+        # Whole marketplace dropped; result is None because no other marketplaces.
+        assert result is None
+        assert any("bot detection triggered" in r.message for r in caplog.records)
+
+    def test_captcha_detection_does_not_match_product_page_mentioning_captcha(self, respx_mock):
+        """A legit product page whose body text happens to mention 'captcha'
+        (e.g. a book about CAPTCHAs) must NOT be classified as a bot-check
+        page — the detector keys on the specific element id, not a substring."""
+        legit_with_captcha_in_copy = AMAZON_HTML.replace(
+            "<span", "<span>Guide to CAPTCHAs and bot protection</span><span", 1
+        )
+        respx_mock.get("https://www.amazon.com/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=legit_with_captcha_in_copy)
+        )
+        result = collect_amazon(["B0CW1MYCGK"], marketplaces=["amazon.com"])
+        assert result is not None
+        assert result["by_marketplace"]["amazon.com"][0]["asin"] == "B0CW1MYCGK"
+
 
 # ---------------------------------------------------------------------------
 # PostHog
