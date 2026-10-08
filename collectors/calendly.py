@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -9,6 +10,69 @@ import httpx
 from collectors._helpers import _utcnow, _iso, _default_since
 
 logger = logging.getLogger(__name__)
+
+
+_ATTRIBUTION_QUESTION_HINT = re.compile(r"\bhear\b.*\babout\b", re.IGNORECASE)
+
+
+def _classify_attribution(answer: str | None) -> str:
+    """Group a free-text referral answer ('How did you hear about me?') into a
+    channel.
+
+    Platform/channel markers are checked before named people, so that
+    'Cate's LinkedIn' buckets to LinkedIn (the channel), not Cate. This
+    mirrors how dri_sales.py groups the Stripe answers so coaching and
+    course attribution read on the same axis (#57).
+
+    No PII leaves this function. Only the channel label is returned —
+    never the raw answer, invitee name or email.
+    """
+    if not answer:
+        return "Unknown"
+    s = answer.lower()
+    # Channels first.
+    if "linkedin" in s:
+        return "LinkedIn"
+    if "newsletter" in s or "buttondown" in s or "substack" in s:
+        return "Newsletter"
+    if "o'reilly" in s or "oreilly" in s or "o reilly" in s:
+        return "O'Reilly"
+    # Named referrers.
+    if "cate" in s:
+        return "Cate"
+    if "jean" in s:
+        return "Jean"
+    # Explicit catch-all for conversational referrals.
+    if (
+        "word of mouth" in s
+        or "friend" in s
+        or "colleague" in s
+        or "recommend" in s
+        or "referral" in s
+    ):
+        return "Word of mouth"
+    return "Other"
+
+
+def _fetch_event_attribution(client: httpx.Client, event_uri: str) -> str | None:
+    """Return the attribution channel for a single scheduled event.
+
+    Returns 'Unknown' when the invitees API returned successfully but
+    carried no attribution answer. Returns None on a transport error so
+    the caller can distinguish a missing-signal booking from a known
+    'no referral answer' one.
+    """
+    try:
+        r = client.get(f"{event_uri}/invitees")
+        r.raise_for_status()
+        for invitee in r.json().get("collection", []):
+            for qa in invitee.get("questions_and_answers", []):
+                if _ATTRIBUTION_QUESTION_HINT.search(qa.get("question", "") or ""):
+                    return _classify_attribution(qa.get("answer"))
+    except Exception as exc:
+        logger.warning("Calendly invitees fetch failed for %s: %s", event_uri, exc)
+        return None
+    return "Unknown"
 
 
 def collect_calendly(
@@ -76,14 +140,26 @@ def collect_calendly(
             r.raise_for_status()
             canceled_events = r.json().get("collection", [])
 
-        # If a lead_gen_event is specified, restrict counting to that event type only
-        def _event_name(event: dict) -> str:
-            et_uri = event.get("event_type", "")
-            return event_type_names.get(et_uri, et_uri.split("/")[-1])
+            # Build the per-booking attribution list — one invitees call per
+            # active event. Canceled events are counted but not attributed:
+            # a cancellation doesn't change where the lead came from, and the
+            # cost scales with the active window.
+            def _event_name(event: dict) -> str:
+                et_uri = event.get("event_type", "")
+                return event_type_names.get(et_uri, et_uri.split("/")[-1])
 
-        if lead_gen_event:
-            active_events = [e for e in active_events if _event_name(e) == lead_gen_event]
-            canceled_events = [e for e in canceled_events if _event_name(e) == lead_gen_event]
+            if lead_gen_event:
+                active_events = [e for e in active_events if _event_name(e) == lead_gen_event]
+                canceled_events = [e for e in canceled_events if _event_name(e) == lead_gen_event]
+
+            bookings: list[dict[str, Any]] = []
+            for event in active_events:
+                channel = _fetch_event_attribution(client, event.get("uri", ""))
+                bookings.append({
+                    "event_type": _event_name(event),
+                    "scheduled_at": event.get("start_time"),
+                    "attribution_channel": channel,
+                })
 
         # Aggregate by event type
         by_type: dict[str, dict[str, int]] = {}
@@ -101,6 +177,16 @@ def collect_calendly(
         total_active = sum(e["active"] for e in bookings_by_type)
         total_canceled = sum(e["canceled"] for e in bookings_by_type)
 
+        # Rollup — grouped channel values only, no PII.
+        attribution_by_channel: dict[str, int] = {}
+        for b in bookings:
+            # None (invitees fetch failed) and the "Unknown" sentinel share the
+            # same bucket in the rollup — the booking exists but we can't
+            # attribute it. Keeping them combined keeps the sum of the rollup
+            # equal to total_bookings regardless of API hiccups.
+            ch = b["attribution_channel"] or "Unknown"
+            attribution_by_channel[ch] = attribution_by_channel.get(ch, 0) + 1
+
         result: dict[str, Any] = {
             "platform": "calendly",
             "collected_at": _iso(_utcnow()),
@@ -109,6 +195,8 @@ def collect_calendly(
             "total_bookings": total_active,
             "total_canceled": total_canceled,
             "bookings_by_type": bookings_by_type,
+            "bookings": bookings,
+            "attribution_by_channel": attribution_by_channel,
         }
 
         if lead_gen_event:
