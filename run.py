@@ -7,7 +7,7 @@ Usage:
     python run.py --months 3               # collect 3 months of history
     python run.py --collect-only           # collect and save raw data only
     python run.py --analyse-only           # build prompt from most recent saved data
-    python run.py --platform <name>        # collect only one platform
+    python run.py --platform <name>        # refresh one platform's data (does NOT touch the weekly snapshot or the prompt)
     python run.py --update                 # collect + build a compact update prompt for the same chat
     python run.py --analyse-only --update  # update prompt from most recent saved data
     python run.py --extract 2026-03-01     # extract posts from date to today (CSV to stdout)
@@ -605,7 +605,10 @@ def parse_args() -> argparse.Namespace:
         "--platform",
         choices=sorted(PLATFORM_COLLECTORS.keys()),
         default=None,
-        help="Collect only one platform (cannot be combined with --analyse-only).",
+        help="Collect only one platform and save it to data/platform/{name}-latest.json. "
+             "Does NOT overwrite the weekly snapshot and does NOT regenerate the prompt. "
+             "Follow with --analyse-only to rebuild the prompt. "
+             "Cannot be combined with --analyse-only or --update.",
     )
     parser.add_argument(
         "--months",
@@ -644,6 +647,18 @@ def main() -> None:
 
     if args.analyse_only and args.platform:
         logger.error("--analyse-only and --platform cannot be used together.")
+        sys.exit(1)
+    if args.update and (args.platform or args.collect_only):
+        # Both --platform and --collect-only exit before the analyse step,
+        # so --update would be silently a no-op. Reject explicitly rather
+        # than drop the flag.
+        other = "--platform" if args.platform else "--collect-only"
+        logger.error(
+            "--update and %s cannot be used together — %s skips the analyse "
+            "step. Run them separately: do the data refresh, then "
+            "`run.py --analyse-only --update`.",
+            other, other,
+        )
         sys.exit(1)
 
     config = load_config()
@@ -698,7 +713,10 @@ def main() -> None:
                 "Collected data from: %s", ", ".join(collected.keys())
             )
 
-        save_raw(collected, label)
+        # --platform runs collect one source and must not overwrite the
+        # weekly snapshot (that's #58) — only persist per-platform.
+        if not args.platform:
+            save_raw(collected, label)
         if collected:
             save_platform_latest(collected)
 
@@ -740,9 +758,10 @@ def main() -> None:
             else:
                 store_update(collected)
 
-        if args.collect_only:
+        if args.collect_only or args.platform:
             from collectors import PLATFORM_COLLECTORS
-            _print_run_summary(collected, list(PLATFORM_COLLECTORS.keys()), config)
+            summary_platforms = [args.platform] if args.platform else list(PLATFORM_COLLECTORS.keys())
+            _print_run_summary(collected, summary_platforms, config)
             return
 
     # ------------------------------------------------------------------

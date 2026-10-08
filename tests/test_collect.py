@@ -339,13 +339,21 @@ class TestCollectButtondown:
         result = collect_buttondown("apikey", since=SINCE)
         assert result["subscriber_counts"]["my-newsletter"] == 750
 
-    def test_no_newsletters_returns_empty_not_none(self, respx_mock):
+    def test_no_newsletters_falls_back_to_direct_collect(self, respx_mock):
+        """When /newsletters returns empty, collect directly using the provided key."""
         respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
             return_value=httpx.Response(200, json={"results": []})
         )
+        respx_mock.get("https://api.buttondown.email/v1/emails").mock(
+            return_value=httpx.Response(200, json={"results": [], "next": None})
+        )
+        respx_mock.get("https://api.buttondown.email/v1/tags").mock(return_value=self.NO_TAGS)
+        respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
+            return_value=httpx.Response(200, json={"count": 42})
+        )
         result = collect_buttondown("apikey", since=SINCE)
         assert result is not None
-        assert result["newsletters"] == []
+        assert result["subscriber_counts"]["default"] == 42
 
     def test_api_error_returns_none(self, respx_mock):
         respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
@@ -951,6 +959,93 @@ class TestCollectAmazon:
         result = collect_amazon(["B0CW1MYCGK"], marketplaces=["amazon.com", "amazon.co.uk"])
         assert "amazon.com" in result["by_marketplace"]
         assert "amazon.co.uk" in result["by_marketplace"]
+
+    def test_captcha_page_skips_rest_of_marketplace(self, respx_mock, monkeypatch, caplog):
+        """A bot-check page (not a transient fetch error) should drop the whole
+        marketplace instead of filling it with all-nulls per ASIN."""
+        import logging
+        monkeypatch.setattr("collectors.amazon.time.sleep", lambda _: None)
+        captcha_html = (
+            '<html><body><form action="/errors/validateCaptcha">'
+            '<input id="captchacharacters" name="field-keywords"></form></body></html>'
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=captcha_html)
+        )
+        # A second ASIN that would succeed if the collector didn't bail.
+        respx_mock.get("https://www.amazon.co.uk/dp/B0OTHER").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.amazon"):
+            result = collect_amazon(["B0CW1MYCGK", "B0OTHER"], marketplaces=["amazon.co.uk"])
+        # Whole marketplace dropped; result is None because no other marketplaces.
+        assert result is None
+        assert any("bot detection triggered" in r.message for r in caplog.records)
+
+    def test_captcha_detected_even_when_served_with_503(self, respx_mock, monkeypatch, caplog):
+        """Amazon sometimes serves the CAPTCHA page with HTTP 503. If we only
+        checked the marker after raise_for_status(), the generic http-error
+        arm would retry the next ASIN against the same blocked IP."""
+        import logging
+        monkeypatch.setattr("collectors.amazon.time.sleep", lambda _: None)
+        captcha_html = (
+            '<html><body><form action="/errors/validateCaptcha">'
+            '<input id="captchacharacters" name="field-keywords"></form></body></html>'
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0A").mock(
+            return_value=httpx.Response(503, text=captcha_html)
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0B").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.amazon"):
+            result = collect_amazon(["B0A", "B0B"], marketplaces=["amazon.co.uk"])
+        assert result is None
+        assert any("bot detection triggered" in r.message for r in caplog.records)
+
+    def test_captcha_mid_batch_discards_earlier_successes(self, respx_mock, monkeypatch, caplog):
+        """When the block fires after a few successful fetches, those earlier
+        ASINs are discarded too — the warning says 'dropping marketplace', the
+        output must not silently include a truncated prefix. Otherwise a
+        downstream rank comparison treats a short list as complete."""
+        import logging
+        monkeypatch.setattr("collectors.amazon.time.sleep", lambda _: None)
+        captcha_html = (
+            '<html><body><input id="captchacharacters"></body></html>'
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0A").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0B").mock(
+            return_value=httpx.Response(200, text=captcha_html)
+        )
+        respx_mock.get("https://www.amazon.co.uk/dp/B0C").mock(
+            return_value=httpx.Response(200, text=AMAZON_HTML)
+        )
+        with caplog.at_level(logging.WARNING, logger="collectors.amazon"):
+            result = collect_amazon(["B0A", "B0B", "B0C"], marketplaces=["amazon.co.uk"])
+        # amazon.co.uk is entirely absent — not partially present with B0A only.
+        assert result is None
+        # The warning tells the operator which ASIN triggered the block and
+        # that earlier successes were dropped.
+        assert any(
+            "B0B" in r.message and "earlier ASINs discarded" in r.message
+            for r in caplog.records
+        )
+
+    def test_captcha_detection_does_not_match_product_page_mentioning_captcha(self, respx_mock):
+        """A legit product page whose body text happens to mention 'captcha'
+        (e.g. a book about CAPTCHAs) must NOT be classified as a bot-check
+        page — the detector keys on the specific element id, not a substring."""
+        legit_with_captcha_in_copy = AMAZON_HTML.replace(
+            "<span", "<span>Guide to CAPTCHAs and bot protection</span><span", 1
+        )
+        respx_mock.get("https://www.amazon.com/dp/B0CW1MYCGK").mock(
+            return_value=httpx.Response(200, text=legit_with_captcha_in_copy)
+        )
+        result = collect_amazon(["B0CW1MYCGK"], marketplaces=["amazon.com"])
+        assert result is not None
+        assert result["by_marketplace"]["amazon.com"][0]["asin"] == "B0CW1MYCGK"
 
 
 # ---------------------------------------------------------------------------

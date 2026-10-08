@@ -398,6 +398,65 @@ class TestMain:
         called_data = mock_save_prompt.call_args[0][0]
         assert "mastodon" in called_data
 
+    def test_platform_flag_does_not_overwrite_weekly_snapshot(self, tmp_path, monkeypatch):
+        """`--platform X` must write to data/platform/{name}-latest.json and
+        leave the weekly data/weekly/<label>.json alone — the whole point of
+        #58's fix. Previously it overwrote the week's full snapshot with
+        just the one platform's data."""
+        data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--platform", "mastodon", "--collect-only"])
+        # Seed a pre-existing weekly snapshot with multi-platform data.
+        weekly_path = data_dir / f"{run.week_label(datetime.now(timezone.utc))}.json"
+        weekly_path.write_text(json.dumps({
+            "mastodon": {"posts": ["old-weekly"]},
+            "bluesky": {"posts": ["old-weekly"]},
+        }))
+
+        mock_collect = MagicMock(return_value={"mastodon": {"posts": ["refreshed"]}})
+        with patch.dict("sys.modules", {
+            "collect": MagicMock(collect_all=mock_collect),
+            "store": MagicMock(update=MagicMock(), get_known_platforms=MagicMock(return_value=set()), storable_platforms=MagicMock(return_value=_STORABLE), STORE_PATH=tmp_path / "analytics.xlsx"),
+            "analyse": MagicMock(save_prompt=MagicMock()),
+        }):
+            run.main()
+
+        # Weekly snapshot untouched.
+        weekly = json.loads(weekly_path.read_text())
+        assert weekly["mastodon"]["posts"] == ["old-weekly"]
+        assert weekly["bluesky"]["posts"] == ["old-weekly"]
+        # Per-platform file written with the refreshed data.
+        platform_path = tmp_path / "data" / "platform" / "mastodon-latest.json"
+        assert platform_path.exists()
+        assert json.loads(platform_path.read_text())["mastodon"]["posts"] == ["refreshed"]
+
+    def test_platform_and_update_rejected(self, tmp_path, monkeypatch, caplog):
+        """--platform exits before the prompt step, so --update would be
+        silently a no-op. Reject the combination explicitly."""
+        import logging
+        _setup_main(tmp_path, monkeypatch, ["--platform", "mastodon", "--update"])
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(SystemExit) as exc_info:
+                run.main()
+        assert exc_info.value.code == 1
+        assert any(
+            "--update and --platform cannot be used together" in r.message
+            for r in caplog.records
+        )
+
+    def test_collect_only_and_update_rejected(self, tmp_path, monkeypatch, caplog):
+        """Same silent-no-op shape as --platform + --update: --collect-only
+        also exits before the prompt step. The two flags must be rejected
+        together, not separately."""
+        import logging
+        _setup_main(tmp_path, monkeypatch, ["--collect-only", "--update"])
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(SystemExit) as exc_info:
+                run.main()
+        assert exc_info.value.code == 1
+        assert any(
+            "--update and --collect-only cannot be used together" in r.message
+            for r in caplog.records
+        )
+
     def test_platform_flag_skips_store_update(self, tmp_path, monkeypatch):
         data_dir, _ = _setup_main(tmp_path, monkeypatch, ["--platform", "mastodon", "--collect-only"])
         mock_collect = MagicMock(return_value={"mastodon": {"posts": []}})
