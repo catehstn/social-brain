@@ -32,8 +32,32 @@ _LINKEDIN_COLUMN_MAP = {
 }
 
 
-def _fetch_linkedin_post_text(url: str) -> str | None:
-    """Fetch the post text from a public LinkedIn post URL via og:description."""
+def _fetch_linkedin_post_meta(url: str) -> tuple[str | None, str | None]:
+    """Fetch a public LinkedIn post page and return (text, media_type).
+
+    `media_type` is one of `"video"`, `"image"`, `"link"`, `"text"`, or
+    `None` if the fetch failed. Classified from the Open Graph meta tags
+    LinkedIn renders on the post page:
+
+    - `og:video` pointing at a LinkedIn-hosted URL (licdn.com /
+      linkedin.com) → `"video"` — this covers native video and
+      audiograms, which is the signal the W38 content review needed
+      (#56). A YouTube/Vimeo/Loom embed also carries `og:video` but
+      falls through to the link branch, since LinkedIn renders those
+      as external link shares with a video preview.
+    - `og:type = "article"` → `"link"` — a shared external link.
+    - `og:image` with a path containing `feedshare` → `"image"` — a user-
+      uploaded image. The author's `profile-displayphoto` also appears as
+      `og:image` on every post (including plain text), so the stricter
+      `feedshare` marker is used rather than mere presence or a bare
+      `/image/` substring (which matches `profile-displayphoto` too).
+    - Otherwise → `"text"`.
+
+    The ambiguity notes in the issue are real: a quote-reshare of a video
+    carries the same `og:video` as a native video post. This is best-effort
+    for the format experiments catalogued in #56; the raw heuristic lives
+    here so it is easy to adjust once there is data to validate against.
+    """
     try:
         headers = {
             "User-Agent": (
@@ -46,17 +70,69 @@ def _fetch_linkedin_post_text(url: str) -> str | None:
         }
         r = httpx.get(url, headers=headers, follow_redirects=True, timeout=15)
         r.raise_for_status()
-        m = re.search(
-            r'<meta[^>]+property="og:description"[^>]+content="([^"]+)"',
-            r.text,
-        )
-        if m:
-            # Strip trailing comment count appended by LinkedIn e.g. " | 28 comments on LinkedIn"
-            text = re.sub(r"\s*\|\s*\d+ comments? on LinkedIn$", "", m.group(1)).strip()
-            return text
+        html = r.text
+        return _parse_linkedin_post_meta(html)
     except Exception as exc:
         logger.debug("LinkedIn post fetch failed (%s): %s", url, exc)
-    return None
+        return None, None
+
+
+def _parse_linkedin_post_meta(html: str) -> tuple[str | None, str | None]:
+    """Pure-function part of `_fetch_linkedin_post_meta`, extracted so the
+    classifier is testable without a mocked HTTP fetch."""
+    text: str | None = None
+    text_m = re.search(
+        r'<meta[^>]+property="og:description"[^>]+content="([^"]+)"', html
+    )
+    if text_m:
+        text = re.sub(
+            r"\s*\|\s*\d+ comments? on LinkedIn$", "", text_m.group(1)
+        ).strip()
+
+    def _og_values(prop: str) -> list[str]:
+        """All values for a property. LinkedIn's HTML carries multiple
+        og:image tags on image posts (profile-displayphoto AND the
+        feedshare image); a single `re.search` would pick whichever
+        appears first and miss the signal we want."""
+        return re.findall(
+            rf'<meta[^>]+property="{re.escape(prop)}"[^>]+content="([^"]*)"',
+            html,
+        )
+
+    def _og_first(prop: str) -> str | None:
+        values = _og_values(prop)
+        return values[0] if values else None
+
+    og_images = _og_values("og:image")
+    has_feedshare = any("feedshare" in img for img in og_images)
+    og_video = _og_first("og:video") or ""
+    # LinkedIn-hosted videos sit on media.licdn.com or dms.licdn.com; an
+    # og:video pointing elsewhere (YouTube/Vimeo/Loom etc.) is an external
+    # link share rendered with a video preview, not a native video post.
+    # Keeping those as 'link' matches the W38 analysis the field exists for.
+    is_linkedin_hosted_video = bool(og_video) and (
+        "licdn.com" in og_video or ".linkedin.com" in og_video
+    )
+
+    if is_linkedin_hosted_video:
+        media_type: str | None = "video"
+    elif has_feedshare:
+        # Checked ahead of the article/link branch: LinkedIn sets
+        # `og:type = "article"` on both image posts and external-link
+        # shares, so the image marker takes precedence.
+        media_type = "image"
+    elif (_og_first("og:type") or "").lower() == "article":
+        media_type = "link"
+    else:
+        media_type = "text"
+
+    return text, media_type
+
+
+# Back-compat shim: callers currently inside this module ask for text only.
+def _fetch_linkedin_post_text(url: str) -> str | None:
+    text, _ = _fetch_linkedin_post_meta(url)
+    return text
 
 
 def _parse_linkedin_xlsx(path: Path) -> dict[str, Any]:
@@ -129,24 +205,33 @@ def _parse_linkedin_xlsx(path: Path) -> dict[str, Any]:
                             "impressions": int(imp) if pd.notna(imp) else None,
                         })
 
-        # Fetch post text for all unique URLs
+        # Fetch post text and media type for all unique URLs.
         all_urls = list({
             p["url"]
             for p in top_by_engagement + top_by_impressions
         })
-        post_texts: dict[str, str | None] = {}
+        post_meta: dict[str, tuple[str | None, str | None]] = {}
         for i, post_url in enumerate(all_urls):
             if i > 0:
                 time.sleep(1)
-            text = _fetch_linkedin_post_text(post_url)
-            post_texts[post_url] = text
-            logger.debug("LinkedIn post text fetched: %s chars", len(text) if text else 0)
+            text, media_type = _fetch_linkedin_post_meta(post_url)
+            post_meta[post_url] = (text, media_type)
+            logger.debug(
+                "LinkedIn post fetched: %s chars, media=%s",
+                len(text) if text else 0, media_type,
+            )
 
         _merge_impressions_into_engagement(top_by_engagement, top_by_impressions)
         for p in top_by_engagement:
-            p["text"] = post_texts.get(p["url"])
+            text, media_type = post_meta.get(p["url"], (None, None))
+            p["text"] = text
+            if media_type is not None:
+                p["media_type"] = media_type
         for p in top_by_impressions:
-            p["text"] = post_texts.get(p["url"])
+            text, media_type = post_meta.get(p["url"], (None, None))
+            p["text"] = text
+            if media_type is not None:
+                p["media_type"] = media_type
 
         result["top_posts_by_engagement"] = top_by_engagement
         result["top_posts_by_impressions"] = top_by_impressions

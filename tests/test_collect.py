@@ -658,6 +658,113 @@ class TestMergeImpressionsIntoEngagement:
         assert "impressions" not in engagement[0]
 
 
+class TestParseLinkedinPostMeta:
+    """The LinkedIn og:*-based media-type classifier (#56)."""
+
+    def _wrap(self, meta: dict[str, str]) -> str:
+        """Build the minimal HTML a real LinkedIn post page carries, with
+        the og tags under test. Keeps real post HTML intentionally
+        synthetic so the test asserts the classifier, not a parse quirk."""
+        tags = "\n".join(
+            f'<meta property="{k}" content="{v}">' for k, v in meta.items()
+        )
+        return f'<html><head>{tags}</head><body></body></html>'
+
+    def test_video_detected_from_og_video(self):
+        from collectors.linkedin import _parse_linkedin_post_meta
+        html = self._wrap({
+            "og:description": "A clip from the latest talk",
+            "og:type": "video.other",
+            "og:video": "https://media.licdn.com/dms/document/.../video.mp4",
+        })
+        text, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "video"
+        assert text == "A clip from the latest talk"
+
+    def test_external_video_link_share_is_classified_as_link_not_video(self):
+        """A YouTube/Vimeo/Loom share carries og:type=article AND an
+        og:video pointing at the external domain. LinkedIn renders those
+        as link previews with video thumbs, not as native videos — the
+        W38 analysis needs them bucketed as 'link', not 'video'."""
+        from collectors.linkedin import _parse_linkedin_post_meta
+        html = self._wrap({
+            "og:description": "Great talk on tenure",
+            "og:type": "article",
+            "og:video": "https://www.youtube.com/embed/abc123",
+            "og:image": "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
+        })
+        _, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "link"
+
+    def test_link_share_detected_from_og_type_article(self):
+        from collectors.linkedin import _parse_linkedin_post_meta
+        html = self._wrap({
+            "og:description": "Great piece on tenure",
+            "og:type": "article",
+            "og:image": "https://external.site/preview.jpg",
+        })
+        _, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "link"
+
+    def test_image_detected_from_feedshare_og_image(self):
+        """An image post carries og:type="article" alongside the feedshare
+        og:image. The feedshare marker takes precedence over article."""
+        from collectors.linkedin import _parse_linkedin_post_meta
+        html = self._wrap({
+            "og:description": "Photo from the event",
+            "og:type": "article",
+            "og:image": "https://media.licdn.com/dms/image/v2/.../feedshare-document-images/0.jpg",
+        })
+        _, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "image"
+
+    def test_image_detected_when_profile_photo_precedes_feedshare(self):
+        """LinkedIn renders multiple og:image tags on an image post —
+        profile-displayphoto first, feedshare image second. A single
+        `re.search` would pick the profile URL (no feedshare), fall through
+        to the article branch, and mis-classify the post as 'link'. The
+        W38 signal #56 was meant to recover depends on this working."""
+        from collectors.linkedin import _parse_linkedin_post_meta
+        # Deliberately author profile-displayphoto FIRST, then feedshare.
+        html = (
+            '<html><head>'
+            '<meta property="og:description" content="Photo from the event">'
+            '<meta property="og:type" content="article">'
+            '<meta property="og:image" content="https://media.licdn.com/dms/image/v2/profile-displayphoto/0.jpg">'
+            '<meta property="og:image" content="https://media.licdn.com/dms/image/v2/feedshare-document-images/0.jpg">'
+            '</head><body></body></html>'
+        )
+        _, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "image"
+
+    def test_text_only_when_og_image_is_the_author_profile_photo(self):
+        """og:image is set on every LinkedIn post including plain text —
+        it falls back to the author's profile photo. Presence alone must
+        not classify a text post as 'image'."""
+        from collectors.linkedin import _parse_linkedin_post_meta
+        html = self._wrap({
+            "og:description": "Just a text thought",
+            "og:type": "profile",
+            "og:image": "https://media.licdn.com/dms/image/v2/profile-displayphoto/0.jpg",
+        })
+        _, media_type = _parse_linkedin_post_meta(html)
+        assert media_type == "text"
+
+    def test_text_when_no_meta_tags_present(self):
+        from collectors.linkedin import _parse_linkedin_post_meta
+        text, media_type = _parse_linkedin_post_meta("<html></html>")
+        assert text is None
+        assert media_type == "text"
+
+    def test_strips_trailing_comment_count_from_description(self):
+        from collectors.linkedin import _parse_linkedin_post_meta
+        html = self._wrap({
+            "og:description": "A short post | 28 comments on LinkedIn",
+        })
+        text, _ = _parse_linkedin_post_meta(html)
+        assert text == "A short post"
+
+
 # ---------------------------------------------------------------------------
 # Substack (file-based — no HTTP needed)
 # ---------------------------------------------------------------------------
