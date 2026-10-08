@@ -107,7 +107,10 @@ def collect_mentions(
                     batch = r.json()
                     pages_fetched += 1
                     for n in batch:
-                        created = n.get("created_at", "")
+                        # `.get("x", "")`'s default fires only on missing
+                        # keys; a null-valued `created_at` would still
+                        # return None and crash on `[:10]`.
+                        created = n.get("created_at") or ""
                         if created and created < _iso(since):
                             url = None
                             break
