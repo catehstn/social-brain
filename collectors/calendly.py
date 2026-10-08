@@ -12,7 +12,28 @@ from collectors._helpers import _utcnow, _iso, _default_since
 logger = logging.getLogger(__name__)
 
 
-_ATTRIBUTION_QUESTION_HINT = re.compile(r"\bhear\b.*\babout\b", re.IGNORECASE)
+# The question text Calendly's form uses varies — "How did you hear about me?",
+# "How did you find me?", "What brought you here?". Match the canonical signals
+# rather than a free-form phrase substring, which would catch unrelated
+# questions like "Any questions you want me to hear about before the call?".
+_ATTRIBUTION_QUESTION_PATTERNS = [
+    re.compile(r"\bhear\s+about\b", re.IGNORECASE),
+    re.compile(r"\bfind\b.{0,20}\b(me|us|you)\b", re.IGNORECASE),
+    re.compile(r"\breferr(ed|al)\b", re.IGNORECASE),
+    re.compile(r"\bbrought\s+you\b", re.IGNORECASE),
+]
+
+
+def _is_attribution_question(question: str | None) -> bool:
+    if not question:
+        return False
+    return any(p.search(question) for p in _ATTRIBUTION_QUESTION_PATTERNS)
+
+
+# Word-boundary patterns for named people. A bare `in` check mis-bucketed
+# "educator", "educated", "communicate", "dedicate" and "jeans" to Cate/Jean.
+_CATE_NAME = re.compile(r"\bcate\b", re.IGNORECASE)
+_JEAN_NAME = re.compile(r"\bjean\b", re.IGNORECASE)
 
 
 def _classify_attribution(answer: str | None) -> str:
@@ -20,27 +41,30 @@ def _classify_attribution(answer: str | None) -> str:
     channel.
 
     Platform/channel markers are checked before named people, so that
-    'Cate's LinkedIn' buckets to LinkedIn (the channel), not Cate. This
-    mirrors how dri_sales.py groups the Stripe answers so coaching and
-    course attribution read on the same axis (#57).
+    'Cate's LinkedIn' buckets to LinkedIn (the channel), not Cate. Within
+    the channel group O'Reilly is checked before Newsletter so
+    'O'Reilly newsletter' doesn't lose the course-side origin.
 
     No PII leaves this function. Only the channel label is returned —
     never the raw answer, invitee name or email.
     """
-    if not answer:
+    if not answer or not answer.strip():
         return "Unknown"
-    s = answer.lower()
-    # Channels first.
+    # Normalise curly apostrophes so 'O’Reilly' matches the ASCII pattern.
+    s = answer.replace("’", "'").lower()
+    # Channels first (O'Reilly before Newsletter: an O'Reilly newsletter
+    # answer is a course-side origin, not generic newsletter).
     if "linkedin" in s:
         return "LinkedIn"
+    if "o'reilly" in s or "oreilly" in s:
+        return "O'Reilly"
     if "newsletter" in s or "buttondown" in s or "substack" in s:
         return "Newsletter"
-    if "o'reilly" in s or "oreilly" in s or "o reilly" in s:
-        return "O'Reilly"
-    # Named referrers.
-    if "cate" in s:
+    # Named referrers — word-boundary matched so "educator", "advocate",
+    # "dedicate", "jeans" etc. don't false-match.
+    if _CATE_NAME.search(s):
         return "Cate"
-    if "jean" in s:
+    if _JEAN_NAME.search(s):
         return "Jean"
     # Explicit catch-all for conversational referrals.
     if (
@@ -61,13 +85,22 @@ def _fetch_event_attribution(client: httpx.Client, event_uri: str) -> str | None
     carried no attribution answer. Returns None on a transport error so
     the caller can distinguish a missing-signal booking from a known
     'no referral answer' one.
+
+    For a group event this returns the first invitee's channel; group
+    events are rare for 1:1 coaching but note it as a design limit (#57).
     """
+    if not event_uri:
+        # The event payload lacked a `uri` — can't ask for its invitees.
+        return None
     try:
         r = client.get(f"{event_uri}/invitees")
         r.raise_for_status()
         for invitee in r.json().get("collection", []):
-            for qa in invitee.get("questions_and_answers", []):
-                if _ATTRIBUTION_QUESTION_HINT.search(qa.get("question", "") or ""):
+            # `.get("x", [])` default only fires on a missing key, not a
+            # null value — Calendly returns `questions_and_answers: null`
+            # when there are no questions, which would raise TypeError.
+            for qa in (invitee.get("questions_and_answers") or []):
+                if _is_attribution_question(qa.get("question")):
                     return _classify_attribution(qa.get("answer"))
     except Exception as exc:
         logger.warning("Calendly invitees fetch failed for %s: %s", event_uri, exc)
@@ -152,14 +185,15 @@ def collect_calendly(
                 active_events = [e for e in active_events if _event_name(e) == lead_gen_event]
                 canceled_events = [e for e in canceled_events if _event_name(e) == lead_gen_event]
 
-            bookings: list[dict[str, Any]] = []
-            for event in active_events:
-                channel = _fetch_event_attribution(client, event.get("uri", ""))
-                bookings.append({
-                    "event_type": _event_name(event),
-                    "scheduled_at": event.get("start_time"),
-                    "attribution_channel": channel,
-                })
+            # One invitees call per active event. Accumulate directly into
+            # the rollup — per-booking records would be redundant with the
+            # grouped values and the issue's PII guidance ("grouped channel
+            # values, not invitee names or emails") would need extra care
+            # for every added field.
+            per_event_channels: list[str | None] = [
+                _fetch_event_attribution(client, event.get("uri", ""))
+                for event in active_events
+            ]
 
         # Aggregate by event type
         by_type: dict[str, dict[str, int]] = {}
@@ -177,15 +211,15 @@ def collect_calendly(
         total_active = sum(e["active"] for e in bookings_by_type)
         total_canceled = sum(e["canceled"] for e in bookings_by_type)
 
-        # Rollup — grouped channel values only, no PII.
+        # Rollup — grouped channel values only, no PII. None (invitees
+        # fetch failed) and the "Unknown" sentinel share the same bucket:
+        # the booking exists but we can't attribute it. Keeping them
+        # combined keeps the sum equal to total_bookings regardless of
+        # API hiccups.
         attribution_by_channel: dict[str, int] = {}
-        for b in bookings:
-            # None (invitees fetch failed) and the "Unknown" sentinel share the
-            # same bucket in the rollup — the booking exists but we can't
-            # attribute it. Keeping them combined keeps the sum of the rollup
-            # equal to total_bookings regardless of API hiccups.
-            ch = b["attribution_channel"] or "Unknown"
-            attribution_by_channel[ch] = attribution_by_channel.get(ch, 0) + 1
+        for channel in per_event_channels:
+            key = channel or "Unknown"
+            attribution_by_channel[key] = attribution_by_channel.get(key, 0) + 1
 
         result: dict[str, Any] = {
             "platform": "calendly",
@@ -195,7 +229,6 @@ def collect_calendly(
             "total_bookings": total_active,
             "total_canceled": total_canceled,
             "bookings_by_type": bookings_by_type,
-            "bookings": bookings,
             "attribution_by_channel": attribution_by_channel,
         }
 
