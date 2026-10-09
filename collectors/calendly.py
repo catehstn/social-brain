@@ -13,14 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 # The question text Calendly's form uses varies — "How did you hear about me?",
-# "How did you find me?", "What brought you here?". Match the canonical signals
-# rather than a free-form phrase substring, which would catch unrelated
-# questions like "Any questions you want me to hear about before the call?".
+# "How did you find me?", "What brought you here?". Pin the start of the
+# question so a general-info prompt like "Any questions you want me to hear
+# about before the call?" or "Did you find me helpful?" is NOT picked up as
+# an attribution question — the previous looser patterns pulled unrelated
+# answers through `_classify_attribution` and poisoned the rollup.
 _ATTRIBUTION_QUESTION_PATTERNS = [
-    re.compile(r"\bhear\s+about\b", re.IGNORECASE),
-    re.compile(r"\bfind\b.{0,20}\b(me|us|you)\b", re.IGNORECASE),
-    re.compile(r"\breferr(ed|al)\b", re.IGNORECASE),
-    re.compile(r"\bbrought\s+you\b", re.IGNORECASE),
+    re.compile(r"^\s*(how|where)\s+did\s+you\s+hear\s+about\b", re.IGNORECASE),
+    re.compile(r"^\s*(how|where)\s+did\s+you\s+find\s+", re.IGNORECASE),
+    re.compile(r"^\s*what\s+brought\s+you\b", re.IGNORECASE),
+    re.compile(r"^\s*who\s+referred\s+you\b", re.IGNORECASE),
+    re.compile(r"^\s*referred\s+by\b", re.IGNORECASE),
 ]
 
 
@@ -32,8 +35,9 @@ def _is_attribution_question(question: str | None) -> bool:
 
 # Word-boundary patterns for named people. A bare `in` check mis-bucketed
 # "educator", "educated", "communicate", "dedicate" and "jeans" to Cate/Jean.
-_CATE_NAME = re.compile(r"\bcate\b", re.IGNORECASE)
-_JEAN_NAME = re.compile(r"\bjean\b", re.IGNORECASE)
+# No IGNORECASE: `_classify_attribution` lowercases the input first.
+_CATE_NAME = re.compile(r"\bcate\b")
+_JEAN_NAME = re.compile(r"\bjean\b")
 
 
 def _classify_attribution(answer: str | None) -> str:
@@ -54,6 +58,12 @@ def _classify_attribution(answer: str | None) -> str:
     s = answer.replace("’", "'").lower()
     # Channels first (O'Reilly before Newsletter: an O'Reilly newsletter
     # answer is a course-side origin, not generic newsletter).
+    #
+    # "LinkedIn Learning" is a different beast — a course-adjacent LMS,
+    # not the social network. Course-side bucket (grouped with O'Reilly
+    # for the growth-channel analysis) wins.
+    if "linkedin learning" in s:
+        return "O'Reilly"
     if "linkedin" in s:
         return "LinkedIn"
     if "o'reilly" in s or "oreilly" in s:
