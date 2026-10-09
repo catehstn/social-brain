@@ -2494,6 +2494,23 @@ class TestCalendlyAttributionClassifier:
         # The plain social-network reference still goes to LinkedIn.
         assert _classify_attribution("Saw your LinkedIn post") == "LinkedIn"
 
+    def test_word_of_mouth_terms_do_not_false_match_substrings(self):
+        """Same bug class as the Cate/Jean word-boundary fix: `"friend" in s`
+        matched 'boyfriend' / 'girlfriend', `"recommend" in s` matched
+        'unrecommended'."""
+        from collectors.calendly import _classify_attribution
+        # "boyfriend" and "girlfriend" do not count as a word-of-mouth referral.
+        assert _classify_attribution("My boyfriend works at your company") == "Other"
+        assert _classify_attribution("Through my girlfriend's network") == "Other"
+        # Negative/compound recommend forms don't count either.
+        assert _classify_attribution("I would not recommend you") == "Word of mouth"  # 'recommend' still matches here — the sentiment is a separate concern
+        assert _classify_attribution("Unrecommended on Reddit") == "Other"
+        # The genuine terms still match.
+        assert _classify_attribution("A friend told me") == "Word of mouth"
+        assert _classify_attribution("Friends recommended you") == "Word of mouth"
+        assert _classify_attribution("my colleague") == "Word of mouth"
+        assert _classify_attribution("colleagues") == "Word of mouth"
+
 
 class TestCalendlyAttributionQuestionMatching:
     """`_is_attribution_question` pins the start of the question text so a
