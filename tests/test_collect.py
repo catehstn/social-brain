@@ -2484,6 +2484,80 @@ class TestCalendlyAttributionClassifier:
         assert _classify_attribution("   ") == "Unknown"
         assert _classify_attribution("\t\n") == "Unknown"
 
+    def test_linkedin_learning_buckets_as_oreilly_not_linkedin(self):
+        """LinkedIn Learning is a course-adjacent LMS, not the social network.
+        A 'linkedin' substring match would over-count LinkedIn attribution
+        and under-count the course-side origin."""
+        from collectors.calendly import _classify_attribution
+        assert _classify_attribution("Found you through LinkedIn Learning") == "O'Reilly"
+        assert _classify_attribution("linkedin learning course") == "O'Reilly"
+        # The plain social-network reference still goes to LinkedIn.
+        assert _classify_attribution("Saw your LinkedIn post") == "LinkedIn"
+
+    def test_word_of_mouth_terms_do_not_false_match_substrings(self):
+        """Same bug class as the Cate/Jean word-boundary fix: `"friend" in s`
+        matched 'boyfriend' / 'girlfriend', `"recommend" in s` matched
+        'unrecommended'."""
+        from collectors.calendly import _classify_attribution
+        # "boyfriend" and "girlfriend" do not count as a word-of-mouth referral.
+        assert _classify_attribution("My boyfriend works at your company") == "Other"
+        assert _classify_attribution("Through my girlfriend's network") == "Other"
+        # Negative/compound recommend forms don't count either.
+        assert _classify_attribution("I would not recommend you") == "Word of mouth"  # 'recommend' still matches here — the sentiment is a separate concern
+        assert _classify_attribution("Unrecommended on Reddit") == "Other"
+        # The genuine terms still match.
+        assert _classify_attribution("A friend told me") == "Word of mouth"
+        assert _classify_attribution("Friends recommended you") == "Word of mouth"
+        assert _classify_attribution("my colleague") == "Word of mouth"
+        assert _classify_attribution("colleagues") == "Word of mouth"
+
+
+class TestCalendlyAttributionQuestionMatching:
+    """`_is_attribution_question` pins the start of the question text so a
+    general-info prompt like 'Any questions you want me to hear about before
+    the call?' is NOT treated as an attribution question (round-two review
+    on PR #61)."""
+
+    def test_canonical_hear_about_question_matches(self):
+        from collectors.calendly import _is_attribution_question
+        assert _is_attribution_question("How did you hear about me?")
+        assert _is_attribution_question("Where did you hear about this?")
+        # Leading whitespace tolerated.
+        assert _is_attribution_question("  How did you hear about us?")
+
+    def test_canonical_find_me_question_matches(self):
+        from collectors.calendly import _is_attribution_question
+        assert _is_attribution_question("How did you find me?")
+        assert _is_attribution_question("Where did you find us?")
+
+    def test_canonical_brought_you_question_matches(self):
+        from collectors.calendly import _is_attribution_question
+        assert _is_attribution_question("What brought you here?")
+
+    def test_canonical_referred_questions_match(self):
+        from collectors.calendly import _is_attribution_question
+        assert _is_attribution_question("Who referred you?")
+        assert _is_attribution_question("Referred by:")
+
+    def test_hear_about_embedded_in_general_question_does_not_match(self):
+        """Pre-fix regex matched this and would run the answer through the
+        classifier, polluting the rollup."""
+        from collectors.calendly import _is_attribution_question
+        assert not _is_attribution_question("Any questions you want me to hear about before the call?")
+        assert not _is_attribution_question("What topics would you like me to hear about?")
+
+    def test_feedback_find_question_does_not_match(self):
+        """'Did you find me helpful?' is a feedback prompt, not attribution.
+        Pre-fix `\\bfind\\b.{0,20}\\b(me|us|you)\\b` matched it."""
+        from collectors.calendly import _is_attribution_question
+        assert not _is_attribution_question("Did you find me helpful?")
+        assert not _is_attribution_question("Can we help you find us before the call?")
+
+    def test_empty_or_none_does_not_match(self):
+        from collectors.calendly import _is_attribution_question
+        assert not _is_attribution_question(None)
+        assert not _is_attribution_question("")
+
 
 @pytest.mark.respx(base_url="https://api.calendly.com")
 class TestCalendlyAttributionEndToEnd:

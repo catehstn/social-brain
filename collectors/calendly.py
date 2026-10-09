@@ -13,14 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 # The question text Calendly's form uses varies — "How did you hear about me?",
-# "How did you find me?", "What brought you here?". Match the canonical signals
-# rather than a free-form phrase substring, which would catch unrelated
-# questions like "Any questions you want me to hear about before the call?".
+# "How did you find me?", "What brought you here?". Pin the start of the
+# question so a general-info prompt like "Any questions you want me to hear
+# about before the call?" or "Did you find me helpful?" is NOT picked up as
+# an attribution question — the previous looser patterns pulled unrelated
+# answers through `_classify_attribution` and poisoned the rollup.
 _ATTRIBUTION_QUESTION_PATTERNS = [
-    re.compile(r"\bhear\s+about\b", re.IGNORECASE),
-    re.compile(r"\bfind\b.{0,20}\b(me|us|you)\b", re.IGNORECASE),
-    re.compile(r"\breferr(ed|al)\b", re.IGNORECASE),
-    re.compile(r"\bbrought\s+you\b", re.IGNORECASE),
+    re.compile(r"^\s*(how|where)\s+did\s+you\s+hear\s+about\b", re.IGNORECASE),
+    re.compile(r"^\s*(how|where)\s+did\s+you\s+find\s+", re.IGNORECASE),
+    re.compile(r"^\s*what\s+brought\s+you\b", re.IGNORECASE),
+    re.compile(r"^\s*who\s+referred\s+you\b", re.IGNORECASE),
+    re.compile(r"^\s*referred\s+by\b", re.IGNORECASE),
 ]
 
 
@@ -32,8 +35,18 @@ def _is_attribution_question(question: str | None) -> bool:
 
 # Word-boundary patterns for named people. A bare `in` check mis-bucketed
 # "educator", "educated", "communicate", "dedicate" and "jeans" to Cate/Jean.
-_CATE_NAME = re.compile(r"\bcate\b", re.IGNORECASE)
-_JEAN_NAME = re.compile(r"\bjean\b", re.IGNORECASE)
+# Same shape for the word-of-mouth terms: "friend" was matching "boyfriend",
+# "recommend" was matching "unrecommended", etc.
+# No IGNORECASE: `_classify_attribution` lowercases the input first.
+_CATE_NAME = re.compile(r"\bcate\b")
+_JEAN_NAME = re.compile(r"\bjean\b")
+_WORD_OF_MOUTH_PATTERNS = [
+    re.compile(r"\bword of mouth\b"),
+    re.compile(r"\bfriends?\b"),
+    re.compile(r"\bcolleagues?\b"),
+    re.compile(r"\brecommend(ed|ation)?\b"),
+    re.compile(r"\breferr(ed|al)\b"),
+]
 
 
 def _classify_attribution(answer: str | None) -> str:
@@ -54,6 +67,12 @@ def _classify_attribution(answer: str | None) -> str:
     s = answer.replace("’", "'").lower()
     # Channels first (O'Reilly before Newsletter: an O'Reilly newsletter
     # answer is a course-side origin, not generic newsletter).
+    #
+    # "LinkedIn Learning" is a different beast — a course-adjacent LMS,
+    # not the social network. Course-side bucket (grouped with O'Reilly
+    # for the growth-channel analysis) wins.
+    if "linkedin learning" in s:
+        return "O'Reilly"
     if "linkedin" in s:
         return "LinkedIn"
     if "o'reilly" in s or "oreilly" in s:
@@ -66,14 +85,10 @@ def _classify_attribution(answer: str | None) -> str:
         return "Cate"
     if _JEAN_NAME.search(s):
         return "Jean"
-    # Explicit catch-all for conversational referrals.
-    if (
-        "word of mouth" in s
-        or "friend" in s
-        or "colleague" in s
-        or "recommend" in s
-        or "referral" in s
-    ):
+    # Explicit catch-all for conversational referrals. Word-boundary matched
+    # so "boyfriend"/"girlfriend" don't match friend, "unrecommended" doesn't
+    # match recommend, and "friendship" doesn't match friend.
+    if any(p.search(s) for p in _WORD_OF_MOUTH_PATTERNS):
         return "Word of mouth"
     return "Other"
 
@@ -82,12 +97,15 @@ def _fetch_event_attribution(client: httpx.Client, event_uri: str) -> str | None
     """Return the attribution channel for a single scheduled event.
 
     Returns 'Unknown' when the invitees API returned successfully but
-    carried no attribution answer. Returns None on a transport error so
-    the caller can distinguish a missing-signal booking from a known
-    'no referral answer' one.
+    carried no matching question. Returns None on a transport error or
+    a missing `event_uri` — callers today collapse both into 'Unknown'
+    in the rollup, so the None return is a bookkeeping distinction, not
+    a user-visible one.
 
-    For a group event this returns the first invitee's channel; group
-    events are rare for 1:1 coaching but note it as a design limit (#57).
+    For a group event this returns the FIRST attribution answer found
+    across all invitees' question_and_answers lists — not necessarily
+    the first invitee's. 1:1 coaching is the common case; group-event
+    correctness is #57 cleanup.
     """
     if not event_uri:
         # The event payload lacked a `uri` — can't ask for its invitees.

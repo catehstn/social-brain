@@ -97,11 +97,11 @@ Collects: total pageviews, unique visitors, and per-path breakdown (including cu
 
 **Calendly** (lead-gen metric)
 1. [calendly.com/integrations/api_webhooks](https://calendly.com/integrations/api_webhooks) → Personal Access Tokens → Create new token
-2. Enable these three scopes: `users:read`, `event_types:read`, `scheduled_events:read`
+2. Enable these scopes: `users:read`, `event_types:read`, `scheduled_events:read`, `invitees:read`
 3. Set `calendly_token` in `config.yaml`
 4. Optionally set `calendly_lead_gen_event` to the exact name of your intro/discovery call — this surfaces a `lead_gen_bookings` count as a top-level metric so Claude can treat it as your primary conversion signal
 
-Collects: booking counts grouped by event type with active vs. cancelled split, plus `lead_gen_bookings` if configured.
+Collects: booking counts grouped by event type with active vs. cancelled split, plus `lead_gen_bookings` if configured, and an `attribution_by_channel` rollup grouping each active booking's "How did you hear about me?" answer into LinkedIn / O'Reilly / Newsletter / Cate / Jean / Word of mouth / Other / Unknown. One extra `/scheduled_events/{uri}/invitees` call per active event; only the grouped channel label leaves the collector (no invitee names or emails).
 
 **PostHog Web Analytics**
 
