@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,11 @@ from collectors._helpers import _utcnow, _iso, _default_since
 
 logger = logging.getLogger(__name__)
 
+# Cohort tags look like "dri-3", "em-2", "ai-2a": a course prefix and a cohort
+# number. Interest tags ("dri-future", "talk") don't match. Someone holding two
+# or more cohort tags bought more than once.
+_COHORT_TAG_RE = re.compile(r"^[a-z]+-\d+[a-z]?$")
+
 
 def _collect_buttondown_newsletter(
     client: httpx.Client,
@@ -17,11 +23,18 @@ def _collect_buttondown_newsletter(
     newsletter_key: str,
     since: datetime | None,
     use_since: bool,
-) -> tuple[list[dict], int | None, dict[str, int], dict[str, int]]:
+) -> tuple[list[dict], int | None, dict[str, int], dict[str, int], dict[str, Any]]:
     """Collect emails and subscriber data for a single Buttondown newsletter.
 
-    Returns (emails, total_subscriber_count, tag_totals, tag_new_since).
+    Returns (emails, total_subscriber_count, tag_totals, tag_new_since, confirmed).
     tag_totals and tag_new_since are empty dicts for newsletters with no tags.
+
+    total_subscriber_count is the API's raw count, which includes unactivated
+    (never confirmed, often bots), unsubscribed and undeliverable addresses.
+    `confirmed` holds the counts that exclude them: `count`, `tags`, `new_by_tag`
+    (type == "regular" only), plus `by_type`, `buyers` and `repeat_buyers`
+    (any type; someone who bought and later unsubscribed still bought).
+    It is empty when the API returns no subscriber `type`.
     """
     headers = {"Authorization": f"Token {newsletter_key}"}
     newsletters: list[dict] = []
@@ -84,55 +97,76 @@ def _collect_buttondown_newsletter(
             break
         page += 1
 
-    # Check if this newsletter has any tags before paginating all subscribers
-    tags_r = client.get("https://api.buttondown.email/v1/tags", headers=headers)
-    tags_r.raise_for_status()
-    has_tags = tags_r.json().get("count", 0) > 0
-
     tag_totals: dict[str, int] = {}
     tag_new: dict[str, int] = {}
     subscriber_count: int | None = None
 
-    if has_tags:
-        # Paginate all subscribers and count by tag client-side
-        # (API tag filter doesn't work server-side)
-        sub_page = 1
-        while True:
-            sr = client.get(
-                "https://api.buttondown.email/v1/subscribers",
-                params={"page_size": 100, "page": sub_page},
-                headers=headers,
-            )
-            sr.raise_for_status()
-            sub_data = sr.json()
-            if subscriber_count is None:
-                subscriber_count = sub_data.get("count")
-            for sub in sub_data.get("results", []):
-                for tag in sub.get("tags", []):
-                    tag_totals[tag] = tag_totals.get(tag, 0) + 1
-                    count_since = since or _default_since()
-                    if sub.get("creation_date"):
-                        try:
-                            created = datetime.fromisoformat(
-                                sub["creation_date"].replace("Z", "+00:00")
-                            )
-                            if created >= count_since:
-                                tag_new[tag] = tag_new.get(tag, 0) + 1
-                        except ValueError:
-                            pass
-            if not sub_data.get("next"):
-                break
-            sub_page += 1
-    else:
+    # Paginate all subscribers: tags and confirmation status are both counted
+    # client-side (the API tag filter doesn't work server-side).
+    by_type: dict[str, int] = {}
+    confirmed_tags: dict[str, int] = {}
+    confirmed_new: dict[str, int] = {}
+    confirmed_count = 0
+    buyers = 0
+    repeat_buyers = 0
+    count_since = since or _default_since()
+    sub_page = 1
+    while True:
         sr = client.get(
             "https://api.buttondown.email/v1/subscribers",
-            params={"page_size": 1},
+            params={"page_size": 100, "page": sub_page},
             headers=headers,
         )
         sr.raise_for_status()
-        subscriber_count = sr.json().get("count", None)
+        sub_data = sr.json()
+        if subscriber_count is None:
+            subscriber_count = sub_data.get("count")
+        for sub in sub_data.get("results", []):
+            sub_type = sub.get("type")
+            is_confirmed = sub_type == "regular"
+            if sub_type:
+                by_type[sub_type] = by_type.get(sub_type, 0) + 1
+            if is_confirmed:
+                confirmed_count += 1
+            is_new = False
+            if sub.get("creation_date"):
+                try:
+                    created = datetime.fromisoformat(
+                        sub["creation_date"].replace("Z", "+00:00")
+                    )
+                    is_new = created >= count_since
+                except ValueError:
+                    pass
+            tags = sub.get("tags") or []
+            cohort_tags = [t for t in tags if _COHORT_TAG_RE.match(t)]
+            if cohort_tags:
+                buyers += 1
+            if len(cohort_tags) >= 2:
+                repeat_buyers += 1
+            for tag in tags:
+                tag_totals[tag] = tag_totals.get(tag, 0) + 1
+                if is_new:
+                    tag_new[tag] = tag_new.get(tag, 0) + 1
+                if is_confirmed:
+                    confirmed_tags[tag] = confirmed_tags.get(tag, 0) + 1
+                    if is_new:
+                        confirmed_new[tag] = confirmed_new.get(tag, 0) + 1
+        if not sub_data.get("next"):
+            break
+        sub_page += 1
 
-    return newsletters, subscriber_count, tag_totals, tag_new
+    confirmed: dict[str, Any] = {}
+    if by_type:
+        confirmed = {
+            "count": confirmed_count,
+            "by_type": by_type,
+            "tags": confirmed_tags,
+            "new_by_tag": confirmed_new,
+            "buyers": buyers,
+            "repeat_buyers": repeat_buyers,
+        }
+
+    return newsletters, subscriber_count, tag_totals, tag_new, confirmed
 
 
 def collect_buttondown(
@@ -152,6 +186,7 @@ def collect_buttondown(
         subscriber_counts: dict[str, int] = {}
         tag_counts: dict[str, dict[str, int]] = {}
         tag_new_counts: dict[str, dict[str, int]] = {}
+        confirmed_by_nl: dict[str, dict[str, Any]] = {}
 
         with httpx.Client(timeout=30) as client:
             # Discover all newsletters on the account
@@ -172,7 +207,7 @@ def collect_buttondown(
                 nl_name = nl.get("name") or nl.get("domain") or nl.get("id") or "default"
                 nl_key = nl.get("api_key", api_key)
                 try:
-                    emails, count, tag_totals, tag_new = _collect_buttondown_newsletter(
+                    emails, count, tag_totals, tag_new, confirmed = _collect_buttondown_newsletter(
                         client, nl_name, nl_key, since, use_since
                     )
                     all_newsletters.extend(emails)
@@ -182,6 +217,8 @@ def collect_buttondown(
                         tag_counts[nl_name] = tag_totals
                     if tag_new:
                         tag_new_counts[nl_name] = tag_new
+                    if confirmed:
+                        confirmed_by_nl[nl_name] = confirmed
                     logger.info(
                         "Buttondown [%s]: %d emails, %s subscribers, %d tags",
                         nl_name, len(emails), count, len(tag_totals),
@@ -202,6 +239,9 @@ def collect_buttondown(
             result["subscriber_tags"] = tag_counts
         if tag_new_counts:
             result["new_subscribers_by_tag"] = tag_new_counts
+        if confirmed_by_nl:
+            # Use these for list size and growth, not subscriber_counts.
+            result["confirmed_subscribers"] = confirmed_by_nl
         if use_since:
             result["since"] = _iso(since)
         return result
