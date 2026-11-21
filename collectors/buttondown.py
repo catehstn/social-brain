@@ -12,8 +12,9 @@ from collectors._helpers import _utcnow, _iso, _default_since
 logger = logging.getLogger(__name__)
 
 # Cohort tags look like "dri-3", "em-2", "ai-2a": a course prefix and a cohort
-# number. Interest tags ("dri-future", "talk") don't match. Someone holding two
-# or more cohort tags bought more than once.
+# number. Interest tags ("dri-future", "talk") don't match. Someone holding
+# cohort tags for two different courses bought more than once. Two cohorts of
+# the same course ("dri-2" + "dri-3") is a transfer, not a second purchase.
 _COHORT_TAG_RE = re.compile(r"^[a-z]+-\d+[a-z]?$")
 
 
@@ -33,7 +34,8 @@ def _collect_buttondown_newsletter(
     (never confirmed, often bots), unsubscribed and undeliverable addresses.
     `confirmed` holds the counts that exclude them: `count`, `tags`, `new_by_tag`
     (type == "regular" only), plus `by_type`, `buyers` and `repeat_buyers`
-    (any type; someone who bought and later unsubscribed still bought).
+    (any type; someone who bought and later unsubscribed still bought) and
+    `transfers` (two cohorts of one course, not a second purchase).
     It is empty when the API returns no subscriber `type`.
     """
     headers = {"Authorization": f"Token {newsletter_key}"}
@@ -109,6 +111,7 @@ def _collect_buttondown_newsletter(
     confirmed_count = 0
     buyers = 0
     repeat_buyers = 0
+    transfers = 0
     count_since = since or _default_since()
     sub_page = 1
     while True:
@@ -141,8 +144,11 @@ def _collect_buttondown_newsletter(
             cohort_tags = [t for t in tags if _COHORT_TAG_RE.match(t)]
             if cohort_tags:
                 buyers += 1
-            if len(cohort_tags) >= 2:
+            courses = {t.rsplit("-", 1)[0] for t in cohort_tags}
+            if len(courses) >= 2:
                 repeat_buyers += 1
+            elif len(cohort_tags) >= 2:
+                transfers += 1
             for tag in tags:
                 tag_totals[tag] = tag_totals.get(tag, 0) + 1
                 if is_new:
@@ -164,6 +170,7 @@ def _collect_buttondown_newsletter(
             "new_by_tag": confirmed_new,
             "buyers": buyers,
             "repeat_buyers": repeat_buyers,
+            "transfers": transfers,
         }
 
     return newsletters, subscriber_count, tag_totals, tag_new, confirmed

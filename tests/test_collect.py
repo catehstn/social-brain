@@ -456,25 +456,28 @@ class TestCollectButtondown:
         )
         respx_mock.get("https://api.buttondown.email/v1/subscribers").mock(
             return_value=httpx.Response(200, json={
-                "count": 5, "next": None, "results": [
+                "count": 6, "next": None, "results": [
                     {"type": "regular", "tags": ["dri-1", "em-2"], "creation_date": OLD},
                     {"type": "regular", "tags": ["dri-1"], "creation_date": RECENT},
                     {"type": "regular", "tags": ["sec-future"], "creation_date": RECENT},
+                    {"type": "regular", "tags": ["em-2", "em-3"], "creation_date": OLD},
                     {"type": "unactivated", "tags": ["sec-future"], "creation_date": RECENT},
                     {"type": "unsubscribed", "tags": ["ai-2a", "dri-3"], "creation_date": OLD},
                 ]
             })
         )
         result = collect_buttondown("apikey", since=SINCE)
-        assert result["subscriber_counts"]["my-newsletter"] == 5
+        assert result["subscriber_counts"]["my-newsletter"] == 6
         confirmed = result["confirmed_subscribers"]["my-newsletter"]
-        assert confirmed["count"] == 3
-        assert confirmed["by_type"] == {"regular": 3, "unactivated": 1, "unsubscribed": 1}
-        assert confirmed["tags"] == {"dri-1": 2, "em-2": 1, "sec-future": 1}
+        assert confirmed["count"] == 4
+        assert confirmed["by_type"] == {"regular": 4, "unactivated": 1, "unsubscribed": 1}
+        assert confirmed["tags"] == {"dri-1": 2, "em-2": 2, "em-3": 1, "sec-future": 1}
         assert confirmed["new_by_tag"] == {"dri-1": 1, "sec-future": 1}
-        # Buyers hold a cohort tag; repeat buyers hold two. Unsubscribed still counts.
-        assert confirmed["buyers"] == 3
+        # Buyers hold a cohort tag; repeat buyers hold tags for two courses.
+        # Two cohorts of one course is a transfer. Unsubscribed still counts.
+        assert confirmed["buyers"] == 4
         assert confirmed["repeat_buyers"] == 2
+        assert confirmed["transfers"] == 1
 
     def test_no_tags_omits_tag_fields(self, respx_mock):
         respx_mock.get("https://api.buttondown.email/v1/newsletters").mock(
